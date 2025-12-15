@@ -9,6 +9,8 @@ A production-ready implementation of the Ralph Wiggum software engineering techn
 
 > "Me fail English? That's unpossible!" - Ralph Wiggum
 
+### NOTE: This was a toy project that was itself built with the ralph wiggum technique. Expect bugs, missing functionality, and breaking changes while I clean it up. 
+
 ## 📚 Documentation
 
 **[View Full Documentation](https://mikeyobrien.github.io/ralph-orchestrator/)** | [Quick Start](https://mikeyobrien.github.io/ralph-orchestrator/quick-start/) | [API Reference](https://mikeyobrien.github.io/ralph-orchestrator/api/) | [Examples](https://mikeyobrien.github.io/ralph-orchestrator/examples/)
