@@ -46,4 +46,13 @@ jobs:
         name: python-package-distributions
         path: dist/
     - name: Publish distribution to PyPI
-      uses: pypa/gh-action-pypi-publish@release/v1
+      uses: nick-fields/retry@v3
+      with:
+        timeout_minutes: 5
+        max_attempts: 3
+        retry_wait_seconds: 15
+        command: >-
+          python3 -m pip install pypa/gh-action-pypi-publish@release/v1 &&
+          GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}
+          python3 -m pypa.gh-action-pypi-publish
+          --packages-dir dist/
