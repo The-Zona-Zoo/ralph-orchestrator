@@ -3120,6 +3120,7 @@
 <li><strong>Input validation</strong>: Sanitizes prompts to prevent injection attacks</li>
 <li><strong>Resource limits</strong>: Enforces iteration, runtime, and cost boundaries</li>
 <li><strong>Completion markers</strong>: Early exit when <code>- [x] TASK_COMPLETE</code> detected in prompt file</li>
+<li><strong>Completion promises</strong>: Early exit when agent output contains a configured string (default: <code>LOOP_COMPLETE</code>)</li>
 <li><strong>Loop detection</strong>: Stops when agent outputs are ≥90% similar to recent history</li>
 <li><strong>Consecutive failure limit</strong>: Stops after repeated failures (default: 5)</li>
 <li><strong>Context overflow</strong>: Automatically summarizes when approaching limits</li>
