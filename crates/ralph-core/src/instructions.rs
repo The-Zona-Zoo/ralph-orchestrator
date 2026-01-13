@@ -91,9 +91,9 @@ You're planning, not building.
 
 ## DON'T
 
-- Write implementation code
-- Run tests or make commits
-- Pick tasks to implement yourself
+- ❌ Write implementation code
+- ❌ Run tests or make commits
+- ❌ Pick tasks to implement yourself
 
 ## DONE
 
@@ -137,9 +137,9 @@ You're building, not planning. One task, then exit.
 
 ## DON'T
 
-- Create the scratchpad (planner does that)
-- Decide what tasks to add (planner does that)
-- Output the completion promise (planner does that)
+- ❌ Create the scratchpad (planner does that)
+- ❌ Decide what tasks to add (planner does that)
+- ❌ Output the completion promise (planner does that)
 
 ## STUCK?
 
