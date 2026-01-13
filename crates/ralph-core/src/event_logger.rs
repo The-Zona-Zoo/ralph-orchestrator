@@ -54,10 +54,16 @@ impl EventRecord {
         triggered: Option<&HatId>,
     ) -> Self {
         let payload = if event.payload.len() > Self::MAX_PAYLOAD_LEN {
+            // Find a valid UTF-8 char boundary at or before MAX_PAYLOAD_LEN.
+            // We walk backwards from the limit until we find a char boundary.
+            let mut truncate_at = Self::MAX_PAYLOAD_LEN;
+            while truncate_at > 0 && !event.payload.is_char_boundary(truncate_at) {
+                truncate_at -= 1;
+            }
             format!(
                 "{}... [truncated, {} chars total]",
-                &event.payload[..Self::MAX_PAYLOAD_LEN],
-                event.payload.len()
+                &event.payload[..truncate_at],
+                event.payload.chars().count()
             )
         } else {
             event.payload.clone()
@@ -321,6 +327,23 @@ mod tests {
 
         assert!(record.payload.len() < 1000);
         assert!(record.payload.contains("[truncated"));
+    }
+
+    #[test]
+    fn test_payload_truncation_with_multibyte_chars() {
+        // Create a payload with multi-byte UTF-8 characters (✅ is 3 bytes)
+        // Place emoji near the truncation boundary to trigger the bug
+        let mut payload = "x".repeat(498);
+        payload.push_str("✅✅✅"); // 3 emojis at bytes 498-506
+        payload.push_str(&"y".repeat(500));
+
+        let event = make_event("test", &payload);
+        // This should NOT panic
+        let record = EventRecord::new(1, "hat", &event, None);
+
+        assert!(record.payload.contains("[truncated"));
+        // Verify the payload is valid UTF-8 (would panic on iteration if not)
+        for _ in record.payload.chars() {}
     }
 
     #[test]
