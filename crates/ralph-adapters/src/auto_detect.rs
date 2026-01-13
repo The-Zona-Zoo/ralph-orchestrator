@@ -10,6 +10,17 @@ use tracing::debug;
 /// Default priority order for backend detection.
 pub const DEFAULT_PRIORITY: &[&str] = &["claude", "kiro", "gemini", "codex", "amp"];
 
+/// Maps backend config names to their actual CLI command names.
+///
+/// Some backends have CLI binaries with different names than their config identifiers.
+/// For example, the "kiro" backend uses the "kiro-cli" binary.
+fn detection_command(backend: &str) -> &str {
+    match backend {
+        "kiro" => "kiro-cli",
+        _ => backend,
+    }
+}
+
 /// Cached detection result for session duration.
 static DETECTED_BACKEND: OnceLock<Option<String>> = OnceLock::new();
 
@@ -41,18 +52,20 @@ impl std::error::Error for NoBackendError {}
 /// Checks if a backend is available by running its version command.
 ///
 /// Each backend is detected by running `<command> --version` and checking
-/// for exit code 0.
+/// for exit code 0. The command may differ from the backend name (e.g.,
+/// "kiro" backend uses "kiro-cli" command).
 pub fn is_backend_available(backend: &str) -> bool {
-    let result = Command::new(backend).arg("--version").output();
+    let command = detection_command(backend);
+    let result = Command::new(command).arg("--version").output();
 
     match result {
         Ok(output) => {
             let available = output.status.success();
-            debug!(backend = backend, available = available, "Backend availability check");
+            debug!(backend = backend, command = command, available = available, "Backend availability check");
             available
         }
         Err(_) => {
-            debug!(backend = backend, available = false, "Backend not found in PATH");
+            debug!(backend = backend, command = command, available = false, "Backend not found in PATH");
             false
         }
     }
@@ -149,5 +162,20 @@ mod tests {
         let msg = format!("{}", err);
         assert!(msg.contains("No supported AI backend found"));
         assert!(msg.contains("claude, gemini"));
+    }
+
+    #[test]
+    fn test_detection_command_kiro() {
+        // Kiro backend uses kiro-cli as the command
+        assert_eq!(detection_command("kiro"), "kiro-cli");
+    }
+
+    #[test]
+    fn test_detection_command_others() {
+        // Other backends use their name as the command
+        assert_eq!(detection_command("claude"), "claude");
+        assert_eq!(detection_command("gemini"), "gemini");
+        assert_eq!(detection_command("codex"), "codex");
+        assert_eq!(detection_command("amp"), "amp");
     }
 }
