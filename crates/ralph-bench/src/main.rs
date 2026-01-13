@@ -468,6 +468,7 @@ fn format_termination_reason(reason: &TerminationReason) -> String {
         TerminationReason::MaxCost => "MaxCost".to_string(),
         TerminationReason::ConsecutiveFailures => "ConsecutiveFailures".to_string(),
         TerminationReason::Stopped => "Stopped".to_string(),
+        TerminationReason::Interrupted => "Interrupted".to_string(),
     }
 }
 

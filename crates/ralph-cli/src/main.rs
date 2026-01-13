@@ -307,8 +307,16 @@ async fn run_command(
         return Ok(());
     }
 
-    // Run the orchestration loop
-    run_loop(config, color_mode).await
+    // Run the orchestration loop and exit with proper exit code
+    let reason = run_loop(config, color_mode).await?;
+    let exit_code = reason.exit_code();
+
+    // Use explicit exit for non-zero codes to ensure proper exit status
+    if exit_code != 0 {
+        std::process::exit(exit_code);
+    }
+
+    Ok(())
 }
 
 fn events_command(color_mode: ColorMode, args: EventsArgs) -> Result<()> {
@@ -474,7 +482,7 @@ fn truncate(s: &str, max_len: usize) -> String {
     }
 }
 
-async fn run_loop(config: RalphConfig, color_mode: ColorMode) -> Result<()> {
+async fn run_loop(config: RalphConfig, color_mode: ColorMode) -> Result<TerminationReason> {
     let use_colors = color_mode.should_use_colors();
 
     // Determine effective PTY mode (with fallback logic)
@@ -518,12 +526,15 @@ async fn run_loop(config: RalphConfig, color_mode: ColorMode) -> Result<()> {
     };
     debug!(execution_mode = %exec_mode, "Execution mode configured");
 
+    // Track the last hat to detect hat changes for logging
+    let mut last_hat: Option<HatId> = None;
+
     // Main orchestration loop
     loop {
         // Check termination before execution
         if let Some(reason) = event_loop.check_termination() {
             print_termination(&reason, event_loop.state(), use_colors);
-            break;
+            return Ok(reason);
         }
 
         // Get next hat to execute
@@ -531,12 +542,21 @@ async fn run_loop(config: RalphConfig, color_mode: ColorMode) -> Result<()> {
             Some(id) => id.clone(),
             None => {
                 warn!("No hats with pending events, terminating");
-                break;
+                // No pending events is treated as stopped (not a success)
+                let reason = TerminationReason::Stopped;
+                print_termination(&reason, event_loop.state(), use_colors);
+                return Ok(reason);
             }
         };
 
         let iteration = event_loop.state().iteration + 1;
-        info!("Iteration {}: executing hat '{}'", iteration, hat_id);
+
+        // Per spec: Log "Putting on my {hat} hat." when hat changes
+        if last_hat.as_ref() != Some(&hat_id) {
+            info!("Putting on my {} hat.", hat_id);
+            last_hat = Some(hat_id.clone());
+        }
+        debug!("Iteration {}/{} — wearing {} hat", iteration, config.event_loop.max_iterations, hat_id);
 
         // Build prompt for this hat
         let prompt = if config.is_single_mode() {
@@ -566,7 +586,7 @@ async fn run_loop(config: RalphConfig, color_mode: ColorMode) -> Result<()> {
         // Process output
         if let Some(reason) = event_loop.process_output(&hat_id, &output, success) {
             print_termination(&reason, event_loop.state(), use_colors);
-            break;
+            return Ok(reason);
         }
 
         // Handle checkpointing (only if git_checkpoint is enabled)
@@ -576,8 +596,6 @@ async fn run_loop(config: RalphConfig, color_mode: ColorMode) -> Result<()> {
             }
         }
     }
-
-    Ok(())
 }
 
 /// Executes a prompt in PTY mode with raw terminal handling.
@@ -663,6 +681,7 @@ fn print_termination(reason: &TerminationReason, state: &ralph_core::LoopState, 
         TerminationReason::MaxCost => (YELLOW, "⚠", "Maximum cost exceeded"),
         TerminationReason::ConsecutiveFailures => (RED, "✗", "Too many consecutive failures"),
         TerminationReason::Stopped => (CYAN, "■", "Manually stopped"),
+        TerminationReason::Interrupted => (YELLOW, "⚡", "Interrupted by signal"),
     };
 
     let separator = "─".repeat(58);

@@ -25,6 +25,28 @@ pub enum TerminationReason {
     ConsecutiveFailures,
     /// Manually stopped.
     Stopped,
+    /// Interrupted by signal (SIGINT/SIGTERM).
+    Interrupted,
+}
+
+impl TerminationReason {
+    /// Returns the exit code for this termination reason per spec.
+    ///
+    /// Per spec "Loop Termination" section:
+    /// - 0: Completion promise detected (success)
+    /// - 1: Consecutive failures or unrecoverable error (failure)
+    /// - 2: Max iterations, max runtime, or max cost exceeded (limit)
+    /// - 130: User interrupt (SIGINT = 128 + 2)
+    pub fn exit_code(&self) -> i32 {
+        match self {
+            TerminationReason::CompletionPromise => 0,
+            TerminationReason::ConsecutiveFailures | TerminationReason::Stopped => 1,
+            TerminationReason::MaxIterations
+            | TerminationReason::MaxRuntime
+            | TerminationReason::MaxCost => 2,
+            TerminationReason::Interrupted => 130,
+        }
+    }
 }
 
 /// Current state of the event loop.
@@ -423,5 +445,21 @@ hats:
             !prompt.contains("BUILDER MODE"),
             "Custom hat should not use builder prompt"
         );
+    }
+
+    #[test]
+    fn test_exit_codes_per_spec() {
+        // Per spec "Loop Termination" section:
+        // - 0: Completion promise detected (success)
+        // - 1: Consecutive failures or unrecoverable error (failure)
+        // - 2: Max iterations, max runtime, or max cost exceeded (limit)
+        // - 130: User interrupt (SIGINT = 128 + 2)
+        assert_eq!(TerminationReason::CompletionPromise.exit_code(), 0);
+        assert_eq!(TerminationReason::ConsecutiveFailures.exit_code(), 1);
+        assert_eq!(TerminationReason::Stopped.exit_code(), 1);
+        assert_eq!(TerminationReason::MaxIterations.exit_code(), 2);
+        assert_eq!(TerminationReason::MaxRuntime.exit_code(), 2);
+        assert_eq!(TerminationReason::MaxCost.exit_code(), 2);
+        assert_eq!(TerminationReason::Interrupted.exit_code(), 130);
     }
 }
