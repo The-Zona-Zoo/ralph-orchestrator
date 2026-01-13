@@ -6,6 +6,7 @@ members = [
     "crates/ralph-adapters",
     "crates/ralph-tui",
     "crates/ralph-cli",
+    "crates/ralph-bench",
 ]
 
 [workspace.package]
@@ -59,6 +60,7 @@ ralph-core = { path = "crates/ralph-core" }
 ralph-adapters = { path = "crates/ralph-adapters" }
 ralph-tui = { path = "crates/ralph-tui" }
 ralph-cli = { path = "crates/ralph-cli" }
+ralph-bench = { path = "crates/ralph-bench" }
 
 # Config for 'dist'
 [workspace.metadata.dist]

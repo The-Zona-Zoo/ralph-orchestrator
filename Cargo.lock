@@ -548,6 +548,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "ralph-bench"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "ralph-core",
+ "ralph-proto",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "ralph-cli"
 version = "0.1.0"
 dependencies = [
