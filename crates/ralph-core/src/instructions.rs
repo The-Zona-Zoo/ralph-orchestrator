@@ -1,8 +1,8 @@
 //! Instruction builder for Ralph agent prompts.
 //!
-//! Philosophy: Let Ralph Ralph. Two modes for one agent wearing different hats:
-//! - Coordinator (Planner hat): Plans work, owns scratchpad, validates completion
-//! - Ralph (Builder hat): Implements tasks, runs backpressure, commits
+//! Philosophy: One agent, multiple hats. Ralph switches hats, not personalities:
+//! - Planner hat: Plans work, owns scratchpad, validates completion
+//! - Builder hat: Implements tasks, runs backpressure, commits
 //!
 //! This maps directly to ghuntley's PROMPT_plan.md / PROMPT_build.md split.
 
@@ -11,7 +11,7 @@ use ralph_proto::Hat;
 
 /// Builds the prepended instructions for agent prompts.
 ///
-/// One agent, two hats: Coordinator (planner) and Ralph (builder).
+/// One agent, two hats: Planner and Builder. Both are Ralph wearing different hats.
 /// The orchestrator routes events to trigger hat changes.
 ///
 /// Per spec: "Core behaviors are always present—hats add to them, never replace."
@@ -61,44 +61,45 @@ impl InstructionBuilder {
         )
     }
 
-    /// Builds Coordinator instructions (the Planner hat).
+    /// Builds Planner instructions (Ralph with planner hat).
     ///
-    /// Coordinator owns the scratchpad and decides what work needs doing.
-    /// It does NOT implement—that's Ralph's job (Builder hat).
+    /// Planner owns the scratchpad and decides what work needs doing.
+    /// It does NOT implement—that's the builder hat's job.
     pub fn build_coordinator(&self, prompt_content: &str) -> String {
         let core_behaviors = self.build_core_behaviors();
 
         format!(
-            "You are Coordinator Ralph. You plan work and validate completion. You do NOT implement.
+            r#"You are Ralph. You've got your planner hat on.
 
 {core_behaviors}
 
-## YOUR JOB
+## PLANNER MODE
 
-1. **Gap analysis.** Study `{specs_dir}` and compare against the codebase. What's missing? What's broken?
+You're planning, not building.
+
+1. **Gap analysis.** Compare `{specs_dir}` against codebase. What's missing? Broken?
 
 2. **Own the scratchpad.** Create or update `{scratchpad}` with prioritized tasks.
    - `[ ]` pending
    - `[x]` done
    - `[~]` cancelled (with reason)
 
-3. **Dispatch work.** Publish `<event topic=\"build.task\">` ONE AT A TIME with clear acceptance criteria.
+3. **Dispatch work.** Publish `<event topic="build.task">` ONE AT A TIME. Clear acceptance criteria.
 
-4. **Validate completion.** When Ralph reports `build.done`, verify the work actually satisfies the spec.
+4. **Validate.** When build reports done, verify it satisfies the spec.
 
-## WHAT YOU DON'T DO
+## DON'T
 
 - ❌ Write implementation code
-- ❌ Run tests (Ralph does that)
-- ❌ Make commits (Ralph does that)
+- ❌ Run tests or make commits
 - ❌ Pick tasks to implement yourself
 
-## COMPLETION
+## DONE
 
-When ALL tasks are `[x]` or `[~]` and ALL specs are satisfied, output: {promise}
+When ALL tasks are `[x]` or `[~]` and specs are satisfied, output: {promise}
 
 ---
-{prompt}",
+{prompt}"#,
             core_behaviors = core_behaviors,
             specs_dir = self.core.specs_dir,
             scratchpad = self.core.scratchpad,
@@ -107,36 +108,36 @@ When ALL tasks are `[x]` or `[~]` and ALL specs are satisfied, output: {promise}
         )
     }
 
-    /// Builds Ralph instructions (the Builder hat).
+    /// Builds Builder instructions (Ralph with builder hat).
     ///
-    /// Ralph implements tasks. It does NOT plan or manage the scratchpad.
+    /// Builder implements tasks. It does NOT plan or manage the scratchpad.
     pub fn build_ralph(&self, prompt_content: &str) -> String {
         let core_behaviors = self.build_core_behaviors();
 
         format!(
-            r#"You are Ralph. You implement. One task, then done.
+            r#"You are Ralph. You've got your builder hat on.
 
 {core_behaviors}
 
-## YOUR JOB
+## BUILDER MODE
 
-1. **Pick ONE task.** Read `{scratchpad}`, pick the highest priority `[ ]` task.
+You're building, not planning. One task, then exit.
 
-2. **Implement it.** Write the code. Follow existing patterns.
+1. **Pick ONE task.** Highest priority `[ ]` from `{scratchpad}`.
 
-3. **Validate.** Run backpressure. Tests, typecheck, lint must pass.
+2. **Implement.** Write the code. Follow existing patterns.
 
-4. **Commit and exit.** One task, one commit. Mark `[x]` in scratchpad. Publish `<event topic="build.done">` with changes summary.
+3. **Validate.** Run backpressure. Must pass.
 
-## WHAT YOU DON'T DO
+4. **Commit.** One task, one commit. Mark `[x]` in scratchpad.
 
-- ❌ Create the scratchpad (Coordinator does that)
-- ❌ Decide what tasks to add (Coordinator does that)
-- ❌ Output the completion promise (Coordinator does that)
+5. **Exit.** Publish `<event topic="build.done">`. The loop continues.
 
-## WHEN DONE
+## DON'T
 
-Mark your task `[x]` in the scratchpad. Publish `<event topic="build.done">`. Exit. Coordinator will verify.
+- ❌ Create the scratchpad (planner does that)
+- ❌ Decide what tasks to add (planner does that)
+- ❌ Output the completion promise (planner does that)
 
 ## STUCK?
 
@@ -155,7 +156,7 @@ Can't finish? Publish `<event topic="build.blocked">` with:
 
     /// Builds custom hat instructions for extended multi-agent configurations.
     ///
-    /// Use this for teams beyond the default Coordinator + Ralph.
+    /// Use this for teams beyond the default planner + builder hats.
     pub fn build_custom_hat(&self, hat: &Hat, events_context: &str) -> String {
         let core_behaviors = self.build_core_behaviors();
 
@@ -222,21 +223,26 @@ mod tests {
     }
 
     #[test]
-    fn test_coordinator_plans_not_implements() {
+    fn test_planner_hat_plans_not_implements() {
         let builder = default_builder("LOOP_COMPLETE");
         let instructions = builder.build_coordinator("Build a CLI tool");
 
-        // Identity
-        assert!(instructions.contains("Coordinator Ralph"));
+        // Identity: Ralph with planner hat
+        assert!(instructions.contains("You are Ralph"));
+        assert!(instructions.contains("planner hat"));
         assert!(instructions.contains("Build a CLI tool"));
 
-        // Coordinator's job (per spec lines 236-263)
+        // Planner mode header per spec
+        assert!(instructions.contains("## PLANNER MODE"));
+        assert!(instructions.contains("planning, not building"));
+
+        // Planner's job (per spec lines 236-263)
         assert!(instructions.contains("Gap analysis"));
         assert!(instructions.contains("Own the scratchpad"));
-        assert!(instructions.contains("Dispatch work")); // New: dispatches build.task events
-        assert!(instructions.contains("build.task")); // New: publishes build.task
-        assert!(instructions.contains("ONE AT A TIME")); // New: per spec
-        assert!(instructions.contains("Validate completion"));
+        assert!(instructions.contains("Dispatch work")); // dispatches build.task events
+        assert!(instructions.contains("build.task")); // publishes build.task
+        assert!(instructions.contains("ONE AT A TIME")); // per spec
+        assert!(instructions.contains("Validate")); // validates completion
         assert!(instructions.contains("./specs/"));
 
         // Task markers per spec
@@ -244,37 +250,42 @@ mod tests {
         assert!(instructions.contains("[x]")); // done
         assert!(instructions.contains("[~]")); // cancelled
 
-        // Completion promise (Coordinator outputs it)
+        // Completion promise (Planner outputs it)
         assert!(instructions.contains("LOOP_COMPLETE"));
 
-        // What Coordinator doesn't do
+        // What Planner doesn't do
         assert!(instructions.contains("❌ Write implementation code"));
-        assert!(instructions.contains("❌ Run tests"));
-        assert!(instructions.contains("❌ Make commits"));
-        assert!(instructions.contains("❌ Pick tasks to implement yourself")); // New
+        assert!(instructions.contains("❌ Run tests or make commits"));
+        assert!(instructions.contains("❌ Pick tasks to implement yourself"));
     }
 
     #[test]
-    fn test_ralph_implements_not_plans() {
+    fn test_builder_hat_implements_not_plans() {
         let builder = default_builder("LOOP_COMPLETE");
         let instructions = builder.build_ralph("Build a CLI tool");
 
-        // Identity - should be "Ralph" not "Ralph Ralph"
-        assert!(instructions.contains("You are Ralph."));
+        // Identity: Ralph with builder hat
+        assert!(instructions.contains("You are Ralph"));
+        assert!(instructions.contains("builder hat"));
         assert!(instructions.contains("Build a CLI tool"));
 
-        // Ralph's job (per spec lines 266-294)
-        assert!(instructions.contains("Pick ONE task"));
-        assert!(instructions.contains("Implement it"));
-        assert!(instructions.contains("Validate")); // New: step 3 per spec
-        assert!(instructions.contains("backpressure")); // New: must run backpressure
-        assert!(instructions.contains("Commit and exit"));
-        assert!(instructions.contains("build.done")); // New: publishes build.done
+        // Builder mode header per spec
+        assert!(instructions.contains("## BUILDER MODE"));
+        assert!(instructions.contains("building, not planning"));
 
-        // What Ralph doesn't do
-        assert!(instructions.contains("❌ Create the scratchpad"));
-        assert!(instructions.contains("❌ Decide what tasks"));
-        assert!(instructions.contains("❌ Output the completion promise"));
+        // Builder's job (per spec lines 266-294)
+        assert!(instructions.contains("Pick ONE task"));
+        assert!(instructions.contains("Implement"));
+        assert!(instructions.contains("Validate")); // step 3 per spec
+        assert!(instructions.contains("backpressure")); // must run backpressure
+        assert!(instructions.contains("Commit")); // step 4
+        assert!(instructions.contains("Exit")); // step 5
+        assert!(instructions.contains("build.done")); // publishes build.done
+
+        // What Builder doesn't do - references planner, not Coordinator
+        assert!(instructions.contains("❌ Create the scratchpad (planner does that)"));
+        assert!(instructions.contains("❌ Decide what tasks to add (planner does that)"));
+        assert!(instructions.contains("❌ Output the completion promise (planner does that)"));
 
         // STUCK section for build.blocked events
         assert!(instructions.contains("## STUCK?"));
@@ -309,20 +320,21 @@ mod tests {
     #[test]
     fn test_separation_of_concerns() {
         let builder = default_builder("DONE");
-        let coordinator = builder.build_coordinator("test");
-        let ralph = builder.build_ralph("test");
+        let planner = builder.build_coordinator("test");
+        let builder_hat = builder.build_ralph("test");
 
-        // Coordinator does planning, not implementation
-        assert!(coordinator.contains("Gap analysis"));
-        assert!(!coordinator.contains("Commit and exit"));
+        // Planner does planning, not implementation
+        assert!(planner.contains("Gap analysis"));
+        assert!(planner.contains("PLANNER MODE"));
+        assert!(!planner.contains("BUILDER MODE"));
 
-        // Ralph does implementation, not planning
-        assert!(ralph.contains("Commit and exit"));
-        assert!(!ralph.contains("Gap analysis"));
+        // Builder does implementation, not planning
+        assert!(builder_hat.contains("BUILDER MODE"));
+        assert!(!builder_hat.contains("Gap analysis"));
 
-        // Only Coordinator outputs completion promise
-        assert!(coordinator.contains("output: DONE"));
-        assert!(!ralph.contains("output: DONE"));
+        // Only Planner outputs completion promise
+        assert!(planner.contains("output: DONE"));
+        assert!(!builder_hat.contains("output: DONE"));
     }
 
     #[test]
