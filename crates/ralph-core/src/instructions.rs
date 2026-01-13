@@ -124,6 +124,7 @@ When ALL tasks are `[x]` or `[~]` and specs are satisfied, output: {promise}
 You're building, not planning. One task, then exit.
 
 1. **Pick ONE task.** Highest priority `[ ]` from `{scratchpad}`.
+   - **Known Issues are HIGH PRIORITY.** Check `ISSUES.md` in the repo root. Fixing known issues takes precedence. Once fixed, remove the issue from `ISSUES.md`.
 
 2. **Implement.** Write the code. Follow existing patterns.
 
@@ -275,6 +276,9 @@ mod tests {
 
         // Builder's job (per spec lines 266-294)
         assert!(instructions.contains("Pick ONE task"));
+        assert!(instructions.contains("Known Issues are HIGH PRIORITY")); // fixes known issues first
+        assert!(instructions.contains("ISSUES.md")); // centralized issue tracking
+        assert!(instructions.contains("remove the issue from")); // cleans up after fix
         assert!(instructions.contains("Implement"));
         assert!(instructions.contains("Validate")); // step 3 per spec
         assert!(instructions.contains("backpressure")); // must run backpressure

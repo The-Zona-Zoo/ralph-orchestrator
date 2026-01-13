@@ -56,6 +56,37 @@ Trust agent self-correction and self-prioritization across iterations. Human rol
 - Work step-by-step: spec → review → **dogfood spec** → implement → **dogfood implementation** → done.
 - Do NOT add code examples to any specs
 
+### Spec Frontmatter
+
+Every spec must include YAML frontmatter tracking its lifecycle. If a spec is missing frontmatter, add it before making other changes.
+
+```yaml
+---
+status: draft | review | approved | implemented | deprecated
+gap_analysis: YYYY-MM-DD
+related:
+  - other-spec.spec.md
+---
+```
+
+| Field | Description |
+|-------|-------------|
+| `status` | Current lifecycle stage (see below) |
+| `gap_analysis` | Date of last gap analysis between spec and implementation |
+| `related` | List of related spec filenames (optional) |
+
+**Status values:**
+
+| Status | Meaning |
+|--------|---------|
+| `draft` | Work in progress, not ready for review |
+| `review` | Ready for dogfooding and feedback |
+| `approved` | Dogfooded, approved for implementation |
+| `implemented` | Implementation complete and verified |
+| `deprecated` | No longer active, kept for reference |
+
+**Gap analysis:** After implementation, periodically compare the spec against actual behavior. Update `gap_analysis` date when verified. If gaps are found, either update the spec or fix the implementation.
+
 ### Dogfooding: Two Gates
 
 Dogfooding happens twice—once for the spec, once for the implementation.

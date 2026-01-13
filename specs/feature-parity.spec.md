@@ -26,7 +26,6 @@ Rust 2.0 uses the exact same configuration schema as Python v1.x. No field renam
 | `max_iterations` | integer | Maximum loop iterations |
 | `max_runtime` | integer | Maximum runtime in seconds |
 | `max_cost` | float | Maximum cost in USD |
-| `checkpoint_interval` | integer | Iterations between git checkpoints |
 
 ### Adapter Settings
 
@@ -39,7 +38,6 @@ Rust 2.0 uses the exact same configuration schema as Python v1.x. No field renam
 
 | Field | Type | v2 Status |
 |-------|------|-----------|
-| `git_checkpoint` | boolean | Supported |
 | `verbose` | boolean | Supported |
 | `archive_prompts` | boolean | Deferred (warn if enabled) |
 | `enable_metrics` | boolean | Deferred (warn if enabled) |
@@ -169,10 +167,6 @@ Add config field `_suppress_warnings: true` to silence all warnings (for CI envi
 - **Given** config with `max_runtime: 3600`
 - **When** config is loaded
 - **Then** max runtime is set to 3600 seconds
-
-- **Given** config with `checkpoint_interval: 10`
-- **When** config is loaded
-- **Then** git checkpoints occur every 10 iterations
 
 ### Auto-Detection
 

@@ -29,7 +29,6 @@ Ralph Orchestrator v1 (Python) accumulated significant feature bloat that contra
 | **Max Runtime** | `safety.py` | ✅ Done | Safety guardrail |
 | **Max Cost** | `safety.py` | ✅ Done | Safety guardrail (optional) |
 | **Consecutive Failure Limit** | `safety.py` | ✅ Done | Prevent infinite error loops |
-| **Git Checkpointing** | `orchestrator.py` | ✅ Done | Periodic commits for recovery |
 | **Claude Backend** | `adapters/claude.py` | ✅ Done | Primary agent |
 | **Gemini Backend** | `adapters/gemini.py` | ✅ Done | Alternative agent |
 | **Config File (YAML)** | `main.py` | ✅ Done | v1 + v2 format support |
@@ -44,7 +43,7 @@ Ralph Orchestrator v1 (Python) accumulated significant feature bloat that contra
 | **Output Formatting** | 4 formatters (Rich, JSON, Plain, Console) with content detection, syntax highlighting, emoji support | **Single formatter**: plain text with optional color. Agents produce readable output. |
 | **Logging** | 3 loggers (RalphLogger, AsyncFileLogger, VerboseLogger) with rotation, Unicode sanitization | **Single tracing subscriber**: stdout + optional file. Let shell redirect handle the rest. |
 | **Metrics** | CostTracker, iteration history, trigger reasons, JSON export | **Minimal tracking**: iteration count, elapsed time, cumulative cost. Print summary at end. |
-| **Signal Handling** | Complex graceful shutdown with subprocess cleanup | **Simple**: Ctrl-C kills process. Git checkpoint provides recovery point. |
+| **Signal Handling** | Complex graceful shutdown with subprocess cleanup | **Simple**: Ctrl-C kills process. Git commits provide recovery points. |
 
 ### ❌ CUT — YAGNI / Over-Engineering
 
@@ -78,7 +77,6 @@ Ralph Orchestrator v1 (Python) accumulated significant feature bloat that contra
 - [x] Event loop with iteration management
 - [x] Completion promise detection
 - [x] Safety limits (iterations, runtime, cost, failures)
-- [x] Git checkpoint at configurable intervals
 - [x] Single-hat mode (autonomous loop)
 - [x] Multi-hat mode (event-driven multi-agent)
 

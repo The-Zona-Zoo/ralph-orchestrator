@@ -47,7 +47,6 @@ Captured from existing `LoopState` struct:
 - `consecutive_failures`: Failure count
 - `cumulative_cost`: Total USD spent
 - `elapsed()`: Duration since start
-- `checkpoint_count`: Git checkpoints created
 
 Termination captured via `TerminationReason` enum:
 - `CompletionPromise`, `MaxIterations`, `MaxRuntime`, `MaxCost`, `ConsecutiveFailures`, `Stopped`

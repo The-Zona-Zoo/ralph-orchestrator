@@ -129,7 +129,6 @@ Each benchmark task runs in an isolated temporary directory:
 - Temporary workspace initializes its **own** `.git` directory
 - Agent commits stay within the temp workspace
 - Main repository is never modified during benchmarks
-- `git_checkpoint` defaults to `false` in benchmark mode
 
 ### Cleanup Policy
 

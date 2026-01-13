@@ -1,1 +1,1 @@
-Implement the latest changes made to the event-loop spec
+Fix the issues in ISSUES.md

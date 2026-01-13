@@ -195,7 +195,7 @@ Each task runs in an isolated workspace:
 
 1. Fresh directory per task run
 2. No carryover from previous tasks
-3. Git initialized (for checkpoint testing)
+3. Git initialized (for agent commits)
 4. Cleanup after verification (configurable)
 
 ## Metrics Collection

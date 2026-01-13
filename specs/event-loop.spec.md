@@ -348,7 +348,6 @@ event_loop:
   max_iterations: 100
   max_runtime_seconds: 14400
   max_consecutive_failures: 5
-  checkpoint_interval: 5
 
 cli:
   backend: "claude"
@@ -465,7 +464,6 @@ Implement the login feature.
 | `max_iterations` | Terminate after N iterations |
 | `max_runtime_seconds` | Terminate after N seconds |
 | `max_consecutive_failures` | Terminate after N failures in a row |
-| `checkpoint_interval` | Git commit every N iterations |
 
 ### Process Management
 
@@ -565,10 +563,6 @@ The orchestrator owns all spawned CLI processes and must ensure no orphaned proc
 - **When** 5 iterations fail in a row
 - **Then** loop terminates with failure limit reason
 
-- **Given** `checkpoint_interval: 5` in config
-- **When** iteration 5, 10, 15... completes
-- **Then** git commit is created
-
 ### Process Management
 
 - **Given** orchestrator starts
@@ -632,10 +626,6 @@ The orchestrator owns all spawned CLI processes and must ensure no orphaned proc
 - **Given** loop terminates for any reason
 - **When** termination flow executes
 - **Then** `.agent/summary.md` is written with status, iterations, cost, and task summary
-
-- **Given** loop terminates with pending changes
-- **When** termination flow executes
-- **Then** final git checkpoint is created before exit
 
 - **Given** `max_iterations: 10` and iteration reaches 10
 - **When** iteration completes without completion promise
@@ -786,9 +776,8 @@ Completion promise detection:
 ```
 1. [Orchestrator] Detects termination trigger
 2. [Orchestrator] Publishes `loop.terminate` event to observers
-3. [Orchestrator] Creates final checkpoint (git commit if changes pending)
-4. [Orchestrator] Writes summary to `.agent/summary.md`
-5. [Orchestrator] Exits with appropriate exit code
+3. [Orchestrator] Writes summary to `.agent/summary.md`
+4. [Orchestrator] Exits with appropriate exit code
 ```
 
 ### Exit Summary
