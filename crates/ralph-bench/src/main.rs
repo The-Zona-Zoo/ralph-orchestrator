@@ -10,13 +10,15 @@
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
+use ralph_adapters::{detect_backend, CliBackend, CliExecutor};
 use ralph_core::{
-    CleanupPolicy, PlayerConfig, ReplayMode, SessionPlayer, TaskSuite, WorkspaceManager,
+    CleanupPolicy, EventLoop, PlayerConfig, RalphConfig, ReplayMode, SessionPlayer, TaskSuite,
+    TerminationReason, WorkspaceManager,
 };
 use std::fs::{self, File};
 use std::io::{self, BufReader, BufWriter};
 use std::path::PathBuf;
-use tracing::info;
+use tracing::{info, warn};
 
 /// Ralph Benchmark Harness - Record, replay, and benchmark orchestration loops
 #[derive(Parser, Debug)]
@@ -253,21 +255,15 @@ async fn cmd_run(
         // Track timing
         let task_start = std::time::Instant::now();
 
-        // For now, we log that we would run the task
-        // Full integration with EventLoop requires ralph-adapters integration
-        info!(
-            "Task '{}' would run in workspace: {}",
-            task.name,
-            workspace.path().display()
-        );
-        if let Some(ref path) = record_path {
-            info!("Would record to: {:?} (ux={})", path, record_ux);
-        }
-
-        // TODO: Actual EventLoop integration will go here
-        // For now, termination_reason is "NotRun" since we're not executing the loop
-        let iterations = 0u32;
-        let termination_reason = "NotRun".to_string();
+        // Run the orchestration loop for this task
+        let (iterations, termination_reason) = run_task_loop(
+            task,
+            &workspace,
+            record_path.as_ref(),
+            record_ux,
+        )
+        .await
+        .with_context(|| format!("Failed to run task '{}'", task.name))?;
 
         // Run verification command (this works even without full EventLoop integration)
         let verification_result = workspace
@@ -332,6 +328,147 @@ async fn cmd_run(
     }
 
     Ok(())
+}
+
+/// Run the orchestration loop for a single benchmark task.
+///
+/// Returns (iterations, termination_reason) tuple.
+async fn run_task_loop(
+    task: &ralph_core::TaskDefinition,
+    workspace: &ralph_core::TaskWorkspace,
+    _record_path: Option<&PathBuf>,
+    _record_ux: bool,
+) -> Result<(u32, String)> {
+    use ralph_core::{Record, SessionRecorder};
+
+    // Read the prompt file from the workspace (it was copied there during setup)
+    let prompt_path = workspace.path().join("PROMPT.md");
+    let prompt_content = std::fs::read_to_string(&prompt_path)
+        .with_context(|| format!("Failed to read prompt file: {:?}", prompt_path))?;
+
+    // Build config for this task from task definition
+    let mut config = RalphConfig::default();
+    config.event_loop.max_iterations = task.max_iterations;
+    config.event_loop.completion_promise = task.completion_promise.clone();
+    config.event_loop.max_runtime_seconds = task.timeout_seconds;
+    // Disable git checkpointing for benchmarks (workspace has isolated git)
+    config.git_checkpoint = false;
+
+    // Auto-detect backend
+    let priority = config.get_agent_priority();
+    let detected = detect_backend(&priority, |backend| {
+        config.adapter_settings(backend).enabled
+    });
+
+    match detected {
+        Ok(backend_name) => {
+            info!("Using backend: {}", backend_name);
+            config.cli.backend = backend_name;
+        }
+        Err(e) => {
+            // If no backend available, return NotRun
+            warn!("No backend available: {}", e);
+            return Ok((0, "NoBackend".to_string()));
+        }
+    }
+
+    // Initialize event loop
+    let mut event_loop = EventLoop::new(config.clone());
+    event_loop.initialize(&prompt_content);
+
+    // Create CLI executor
+    let backend = CliBackend::from_config(&config.cli);
+    let executor = CliExecutor::new(backend);
+
+    // Setup session recording if requested
+    let _recorder: Option<SessionRecorder<BufWriter<File>>> = if let Some(record_path) = _record_path
+    {
+        let file = File::create(record_path)
+            .with_context(|| format!("Failed to create recording file: {:?}", record_path))?;
+        let recorder = SessionRecorder::new(BufWriter::new(file));
+        recorder.record_meta(Record::meta_loop_start(
+            &config.event_loop.prompt_file,
+            config.event_loop.max_iterations,
+            Some("cli"),
+        ));
+
+        // TODO: Wire up observer to EventBus for full recording
+        // For now, we just create the recorder but don't use it
+        Some(recorder)
+    } else {
+        None
+    };
+
+    info!(
+        "Running task '{}' with max {} iterations",
+        task.name, config.event_loop.max_iterations
+    );
+
+    // Change to workspace directory for execution
+    let original_dir = std::env::current_dir()?;
+    std::env::set_current_dir(workspace.path())?;
+
+    // Main orchestration loop
+    let termination_reason: TerminationReason;
+    loop {
+        // Check termination before execution
+        if let Some(reason) = event_loop.check_termination() {
+            termination_reason = reason;
+            break;
+        }
+
+        // Get next hat to execute
+        let hat_id = match event_loop.next_hat() {
+            Some(id) => id.clone(),
+            None => {
+                warn!("No hats with pending events, terminating");
+                termination_reason = TerminationReason::Stopped;
+                break;
+            }
+        };
+
+        let iteration = event_loop.state().iteration + 1;
+        info!("Task '{}' iteration {}", task.name, iteration);
+
+        // Build prompt for this hat (benchmark always uses single-hat mode)
+        let prompt = event_loop.build_single_prompt(&prompt_content);
+
+        // Execute the prompt (capture output but don't print to stdout)
+        let mut output_buf = Vec::new();
+        let result = executor.execute(&prompt, &mut output_buf).await?;
+
+        // Process output
+        if let Some(reason) = event_loop.process_output(&hat_id, &result.output, result.success) {
+            termination_reason = reason;
+            break;
+        }
+    }
+
+    // Restore original directory
+    std::env::set_current_dir(original_dir)?;
+
+    let state = event_loop.state();
+    let iterations = state.iteration;
+    let reason_str = format_termination_reason(&termination_reason);
+
+    info!(
+        "Task '{}' completed: {} iterations, reason: {}",
+        task.name, iterations, reason_str
+    );
+
+    Ok((iterations, reason_str))
+}
+
+/// Format a TerminationReason into a human-readable string for results output.
+fn format_termination_reason(reason: &TerminationReason) -> String {
+    match reason {
+        TerminationReason::CompletionPromise => "CompletionPromise".to_string(),
+        TerminationReason::MaxIterations => "MaxIterations".to_string(),
+        TerminationReason::MaxRuntime => "MaxRuntime".to_string(),
+        TerminationReason::MaxCost => "MaxCost".to_string(),
+        TerminationReason::ConsecutiveFailures => "ConsecutiveFailures".to_string(),
+        TerminationReason::Stopped => "Stopped".to_string(),
+    }
 }
 
 /// Replay a recorded session

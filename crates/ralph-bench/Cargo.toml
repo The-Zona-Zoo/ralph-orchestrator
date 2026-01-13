@@ -17,6 +17,7 @@ path = "src/main.rs"
 [dependencies]
 ralph-proto.workspace = true
 ralph-core.workspace = true
+ralph-adapters.workspace = true
 
 tokio.workspace = true
 clap.workspace = true
