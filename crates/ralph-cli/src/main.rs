@@ -18,6 +18,37 @@ use std::path::PathBuf;
 use std::process::Command;
 use tracing::{debug, error, info, warn};
 
+// Unix-specific process management for process group leadership
+#[cfg(unix)]
+mod process_management {
+    use nix::unistd::{setpgid, Pid};
+    use tracing::debug;
+
+    /// Sets up process group leadership.
+    ///
+    /// Per spec: "The orchestrator must run as a process group leader. All spawned
+    /// CLI processes (Claude, Kiro, etc.) belong to this group. On termination,
+    /// the entire process group receives the signal, preventing orphans."
+    pub fn setup_process_group() {
+        // Make ourselves the process group leader
+        // This ensures our child processes are in our process group
+        let pid = Pid::this();
+        if let Err(e) = setpgid(pid, pid) {
+            // EPERM is OK - we're already a process group leader (e.g., started from shell)
+            if e != nix::errno::Errno::EPERM {
+                debug!("Note: Could not set process group ({}), continuing anyway", e);
+            }
+        }
+        debug!("Process group initialized: PID {}", pid);
+    }
+}
+
+#[cfg(not(unix))]
+mod process_management {
+    /// No-op on non-Unix platforms.
+    pub fn setup_process_group() {}
+}
+
 /// Color output mode for terminal display.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
 pub enum ColorMode {
@@ -593,6 +624,76 @@ fn get_topic_color(topic: &str) -> &'static str {
     }
 }
 
+/// Returns the emoji for a hat ID.
+fn hat_emoji(hat_id: &str) -> &'static str {
+    match hat_id {
+        "planner" => "🎩",
+        "builder" => "🔨",
+        "reviewer" => "👀",
+        _ => "🎭",
+    }
+}
+
+/// Prints the iteration demarcation separator.
+///
+/// Per spec: "Each iteration must be clearly demarcated in the output so users can
+/// visually distinguish where one iteration ends and another begins."
+///
+/// Format:
+/// ```text
+/// ═══════════════════════════════════════════════════════════════════════════════
+///  ITERATION 3 │ 🔨 builder │ 2m 15s elapsed │ 3/100
+/// ═══════════════════════════════════════════════════════════════════════════════
+/// ```
+fn print_iteration_separator(
+    iteration: u32,
+    hat_id: &str,
+    elapsed: std::time::Duration,
+    max_iterations: u32,
+    use_colors: bool,
+) {
+    use colors::*;
+
+    let emoji = hat_emoji(hat_id);
+    let elapsed_str = format_elapsed(elapsed);
+
+    // Build the content line (without box chars for measuring)
+    let content = format!(
+        " ITERATION {} │ {} {} │ {} elapsed │ {}/{}",
+        iteration, emoji, hat_id, elapsed_str, iteration, max_iterations
+    );
+
+    // Use fixed width of 79 characters for the box (standard terminal width)
+    let box_width = 79;
+    let separator = "═".repeat(box_width);
+
+    if use_colors {
+        println!("\n{BOLD}{CYAN}{separator}{RESET}");
+        println!("{BOLD}{CYAN}{content}{RESET}");
+        println!("{BOLD}{CYAN}{separator}{RESET}");
+    } else {
+        println!("\n{separator}");
+        println!("{content}");
+        println!("{separator}");
+    }
+}
+
+/// Formats elapsed duration as human-readable string.
+fn format_elapsed(d: std::time::Duration) -> String {
+    let total_secs = d.as_secs();
+    let hours = total_secs / 3600;
+    let minutes = (total_secs % 3600) / 60;
+    let seconds = total_secs % 60;
+
+    if hours > 0 {
+        format!("{}h {}m {}s", hours, minutes, seconds)
+    } else if minutes > 0 {
+        format!("{}m {}s", minutes, seconds)
+    } else {
+        format!("{}s", seconds)
+    }
+}
+
 fn truncate(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
         s.to_string()
@@ -613,6 +714,10 @@ async fn run_loop_impl(config: RalphConfig, color_mode: ColorMode, resume: bool)
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
 
+    // Set up process group leadership per spec
+    // "The orchestrator must run as a process group leader"
+    process_management::setup_process_group();
+
     let use_colors = color_mode.should_use_colors();
 
     // Determine effective PTY mode (with fallback logic)
@@ -628,17 +733,46 @@ async fn run_loop_impl(config: RalphConfig, color_mode: ColorMode, resume: bool)
     };
 
     // Set up signal handling for graceful shutdown
-    // Per spec: SIGINT/SIGTERM should allow current iteration to finish, then exit with code 130
+    // Per spec:
+    // - SIGINT (Ctrl+C): Allow current iteration to finish gracefully, exit with code 130
+    // - SIGTERM: Send SIGTERM to child process, wait up to 5s, then SIGKILL if needed
+    // - SIGHUP: Same as SIGTERM—kill child process before exiting
     let interrupted = Arc::new(AtomicBool::new(false));
-    let interrupted_clone = Arc::clone(&interrupted);
 
-    // Spawn a task to listen for Ctrl+C (SIGINT)
+    // Spawn task to listen for SIGINT (Ctrl+C)
+    let interrupted_sigint = Arc::clone(&interrupted);
     tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {
             warn!("Interrupt received (SIGINT), finishing current iteration...");
-            interrupted_clone.store(true, Ordering::SeqCst);
+            interrupted_sigint.store(true, Ordering::SeqCst);
         }
     });
+
+    // Spawn task to listen for SIGTERM (Unix only)
+    #[cfg(unix)]
+    {
+        let interrupted_sigterm = Arc::clone(&interrupted);
+        tokio::spawn(async move {
+            let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("Failed to register SIGTERM handler");
+            sigterm.recv().await;
+            warn!("SIGTERM received, finishing current iteration...");
+            interrupted_sigterm.store(true, Ordering::SeqCst);
+        });
+    }
+
+    // Spawn task to listen for SIGHUP (Unix only)
+    #[cfg(unix)]
+    {
+        let interrupted_sighup = Arc::clone(&interrupted);
+        tokio::spawn(async move {
+            let mut sighup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
+                .expect("Failed to register SIGHUP handler");
+            sighup.recv().await;
+            warn!("SIGHUP received (terminal closed), finishing current iteration...");
+            interrupted_sighup.store(true, Ordering::SeqCst);
+        });
+    }
 
     // Read prompt file
     let prompt_content = std::fs::read_to_string(&config.event_loop.prompt_file)
@@ -736,6 +870,17 @@ async fn run_loop_impl(config: RalphConfig, color_mode: ColorMode, resume: bool)
         };
 
         let iteration = event_loop.state().iteration + 1;
+
+        // Per spec: Print iteration demarcation separator
+        // "Each iteration must be clearly demarcated in the output so users can
+        // visually distinguish where one iteration ends and another begins."
+        print_iteration_separator(
+            iteration,
+            hat_id.as_str(),
+            event_loop.state().elapsed(),
+            config.event_loop.max_iterations,
+            use_colors,
+        );
 
         // Per spec: Log "Putting on my {hat} hat." when hat changes
         if last_hat.as_ref() != Some(&hat_id) {

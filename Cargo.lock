@@ -780,6 +780,7 @@ dependencies = [
  "anyhow",
  "clap",
  "crossterm",
+ "nix 0.29.0",
  "ralph-adapters",
  "ralph-core",
  "ralph-proto",
