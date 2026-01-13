@@ -4,7 +4,7 @@
 //!
 //! This crate provides the foundational abstractions used across all Ralph crates,
 //! including:
-//! - Event and EventBus types for pub/sub messaging
+//! - Event and `EventBus` types for pub/sub messaging
 //! - Hat definitions for agent personas
 //! - Topic matching for event routing
 //! - Common error types

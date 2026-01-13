@@ -82,12 +82,14 @@ impl Hat {
     }
 
     /// Adds a subscription to this hat.
+    #[must_use]
     pub fn subscribe(mut self, topic: impl Into<Topic>) -> Self {
         self.subscriptions.push(topic.into());
         self
     }
 
     /// Sets the instructions for this hat.
+    #[must_use]
     pub fn with_instructions(mut self, instructions: impl Into<String>) -> Self {
         self.instructions = instructions.into();
         self

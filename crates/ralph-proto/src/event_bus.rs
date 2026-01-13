@@ -11,6 +11,7 @@ use std::collections::HashMap;
 type Observer = Box<dyn Fn(&Event) + Send + 'static>;
 
 /// Central pub/sub hub for routing events between hats.
+#[derive(Default)]
 pub struct EventBus {
     /// Registered hats indexed by ID.
     hats: HashMap<HatId, Hat>,
@@ -22,15 +23,6 @@ pub struct EventBus {
     observer: Option<Observer>,
 }
 
-impl Default for EventBus {
-    fn default() -> Self {
-        Self {
-            hats: HashMap::new(),
-            pending: HashMap::new(),
-            observer: None,
-        }
-    }
-}
 
 impl EventBus {
     /// Creates a new empty event bus.
@@ -66,6 +58,7 @@ impl EventBus {
     ///
     /// Returns the list of hat IDs that received the event.
     /// If an observer is set, it receives the event before routing.
+    #[allow(clippy::needless_pass_by_value)] // Event is cloned to multiple recipients
     pub fn publish(&mut self, event: Event) -> Vec<HatId> {
         // Notify observer before routing
         if let Some(ref observer) = self.observer {

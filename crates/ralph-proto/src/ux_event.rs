@@ -55,6 +55,10 @@ impl TerminalWrite {
     }
 
     /// Decodes the base64 bytes back to raw bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the base64 data is malformed.
     pub fn decode_bytes(&self) -> Result<Vec<u8>, base64::DecodeError> {
         use base64::Engine;
         base64::engine::general_purpose::STANDARD.decode(&self.bytes)
@@ -112,7 +116,7 @@ impl TerminalColorMode {
 /// TUI frame capture for future ralph-tui integration.
 ///
 /// This is a placeholder for when TUI support is implemented.
-/// Frame buffers will be captured from ratatui's TestBackend.
+/// Frame buffers will be captured from ratatui's `TestBackend`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TuiFrame {
     /// Sequential frame identifier.
