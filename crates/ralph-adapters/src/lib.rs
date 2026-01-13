@@ -4,8 +4,15 @@
 //!
 //! This crate provides implementations for various AI agent backends:
 //! - Claude (Anthropic)
-//! - Kiro
 //! - Gemini (Google)
-//! - ACP (Agent Communication Protocol)
+//! - Codex (OpenAI)
+//! - Amp
+//! - Custom commands
 //!
-//! Each adapter implements the common agent traits defined in `ralph-proto`.
+//! Each adapter implements the common CLI executor interface.
+
+mod cli_backend;
+mod cli_executor;
+
+pub use cli_backend::{CliBackend, PromptMode};
+pub use cli_executor::{CliExecutor, ExecutionResult};

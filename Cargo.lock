@@ -517,6 +517,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "ralph-adapters",
+ "ralph-core",
+ "ralph-proto",
  "ralph-tui",
  "tokio",
  "tracing",

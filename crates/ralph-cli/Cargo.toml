@@ -13,6 +13,9 @@ name = "ralph"
 path = "src/main.rs"
 
 [dependencies]
+ralph-proto.workspace = true
+ralph-core.workspace = true
+ralph-adapters.workspace = true
 ralph-tui.workspace = true
 
 tokio.workspace = true
