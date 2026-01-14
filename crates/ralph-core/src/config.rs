@@ -523,12 +523,16 @@ impl RalphConfig {
                 triggers: vec!["task.start".to_string(), "task.resume".to_string(), "build.done".to_string(), "build.blocked".to_string()],
                 publishes: vec!["build.task".to_string()],
                 instructions: String::new(),
+                backend: None,
+                default_publishes: None,
             });
             defaults.insert("builder".to_string(), HatConfig {
                 name: "Builder".to_string(),
                 triggers: vec!["build.task".to_string()],
                 publishes: vec!["build.done".to_string(), "build.blocked".to_string()],
                 instructions: String::new(),
+                backend: None,
+                default_publishes: None,
             });
             defaults
         } else {
@@ -856,6 +860,33 @@ pub struct EventMetadata {
     pub on_publish: String,
 }
 
+/// Backend configuration for a hat.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum HatBackend {
+    /// Named backend (e.g., "claude", "gemini", "kiro").
+    Named(String),
+    /// Kiro agent with custom agent name.
+    KiroAgent {
+        #[serde(rename = "type")]
+        backend_type: String,
+        agent: String,
+    },
+    /// Custom backend with command and args.
+    Custom { command: String, args: Vec<String> },
+}
+
+impl HatBackend {
+    /// Converts to CLI backend string for execution.
+    pub fn to_cli_backend(&self) -> String {
+        match self {
+            HatBackend::Named(name) => name.clone(),
+            HatBackend::KiroAgent { .. } => "kiro".to_string(),
+            HatBackend::Custom { .. } => "custom".to_string(),
+        }
+    }
+}
+
 /// Configuration for a single hat.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HatConfig {
@@ -874,6 +905,14 @@ pub struct HatConfig {
     /// Instructions prepended to prompts.
     #[serde(default)]
     pub instructions: String,
+
+    /// Backend to use for this hat (inherits from cli.backend if not specified).
+    #[serde(default)]
+    pub backend: Option<HatBackend>,
+
+    /// Default event to publish if hat forgets to write an event.
+    #[serde(default)]
+    pub default_publishes: Option<String>,
 }
 
 impl HatConfig {
@@ -1427,5 +1466,156 @@ tui:
         let result = tui_config.parse_prefix();
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Invalid key"));
+    }
+
+    #[test]
+    fn test_hat_backend_named() {
+        let yaml = r#""claude""#;
+        let backend: HatBackend = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(backend.to_cli_backend(), "claude");
+        match backend {
+            HatBackend::Named(name) => assert_eq!(name, "claude"),
+            _ => panic!("Expected Named variant"),
+        }
+    }
+
+    #[test]
+    fn test_hat_backend_kiro_agent() {
+        let yaml = r#"
+type: "kiro"
+agent: "builder"
+"#;
+        let backend: HatBackend = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(backend.to_cli_backend(), "kiro");
+        match backend {
+            HatBackend::KiroAgent { backend_type, agent } => {
+                assert_eq!(backend_type, "kiro");
+                assert_eq!(agent, "builder");
+            }
+            _ => panic!("Expected KiroAgent variant"),
+        }
+    }
+
+    #[test]
+    fn test_hat_backend_custom() {
+        let yaml = r#"
+command: "/usr/bin/my-agent"
+args: ["--flag", "value"]
+"#;
+        let backend: HatBackend = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(backend.to_cli_backend(), "custom");
+        match backend {
+            HatBackend::Custom { command, args } => {
+                assert_eq!(command, "/usr/bin/my-agent");
+                assert_eq!(args, vec!["--flag", "value"]);
+            }
+            _ => panic!("Expected Custom variant"),
+        }
+    }
+
+    #[test]
+    fn test_hat_config_with_backend() {
+        let yaml = r#"
+name: "Custom Builder"
+triggers: ["build.task"]
+publishes: ["build.done"]
+instructions: "Build stuff"
+backend: "gemini"
+default_publishes: "task.done"
+"#;
+        let hat: HatConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(hat.name, "Custom Builder");
+        assert!(hat.backend.is_some());
+        match hat.backend.unwrap() {
+            HatBackend::Named(name) => assert_eq!(name, "gemini"),
+            _ => panic!("Expected Named backend"),
+        }
+        assert_eq!(hat.default_publishes, Some("task.done".to_string()));
+    }
+
+    #[test]
+    fn test_hat_config_without_backend() {
+        let yaml = r#"
+name: "Default Hat"
+triggers: ["task.start"]
+publishes: ["task.done"]
+instructions: "Do work"
+"#;
+        let hat: HatConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(hat.name, "Default Hat");
+        assert!(hat.backend.is_none());
+        assert!(hat.default_publishes.is_none());
+    }
+
+    #[test]
+    fn test_mixed_backends_config() {
+        let yaml = r#"
+event_loop:
+  prompt_file: "TASK.md"
+  max_iterations: 50
+
+cli:
+  backend: "claude"
+
+hats:
+  planner:
+    name: "Planner"
+    triggers: ["task.start"]
+    publishes: ["build.task"]
+    instructions: "Plan the work"
+    backend: "claude"
+    
+  builder:
+    name: "Builder"
+    triggers: ["build.task"]
+    publishes: ["build.done"]
+    instructions: "Build the thing"
+    backend:
+      type: "kiro"
+      agent: "builder"
+      
+  reviewer:
+    name: "Reviewer"
+    triggers: ["build.done"]
+    publishes: ["review.complete"]
+    instructions: "Review the work"
+    backend:
+      command: "/usr/local/bin/custom-agent"
+      args: ["--mode", "review"]
+    default_publishes: "review.complete"
+"#;
+        let config: RalphConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.hats.len(), 3);
+
+        // Check planner (Named backend)
+        let planner = config.hats.get("planner").unwrap();
+        assert!(planner.backend.is_some());
+        match planner.backend.as_ref().unwrap() {
+            HatBackend::Named(name) => assert_eq!(name, "claude"),
+            _ => panic!("Expected Named backend for planner"),
+        }
+
+        // Check builder (KiroAgent backend)
+        let builder = config.hats.get("builder").unwrap();
+        assert!(builder.backend.is_some());
+        match builder.backend.as_ref().unwrap() {
+            HatBackend::KiroAgent { backend_type, agent } => {
+                assert_eq!(backend_type, "kiro");
+                assert_eq!(agent, "builder");
+            }
+            _ => panic!("Expected KiroAgent backend for builder"),
+        }
+
+        // Check reviewer (Custom backend)
+        let reviewer = config.hats.get("reviewer").unwrap();
+        assert!(reviewer.backend.is_some());
+        match reviewer.backend.as_ref().unwrap() {
+            HatBackend::Custom { command, args } => {
+                assert_eq!(command, "/usr/local/bin/custom-agent");
+                assert_eq!(args, &vec!["--mode".to_string(), "review".to_string()]);
+            }
+            _ => panic!("Expected Custom backend for reviewer"),
+        }
+        assert_eq!(reviewer.default_publishes, Some("review.complete".to_string()));
     }
 }
