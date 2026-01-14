@@ -74,7 +74,7 @@ impl Default for PtyConfig {
     fn default() -> Self {
         Self {
             interactive: true,
-            idle_timeout_secs: 900,
+            idle_timeout_secs: 30,
             cols: 80,
             rows: 24,
         }
@@ -269,10 +269,10 @@ impl PtyExecutor {
         drop(pair.slave);
 
         let mut output = Vec::new();
-        let timeout_duration = if self.config.idle_timeout_secs > 0 {
-            Some(Duration::from_secs(u64::from(self.config.idle_timeout_secs)))
-        } else {
+        let timeout_duration = if !self.config.interactive || self.config.idle_timeout_secs == 0 {
             None
+        } else {
+            Some(Duration::from_secs(u64::from(self.config.idle_timeout_secs)))
         };
 
         let mut termination = TerminationType::Natural;
@@ -284,7 +284,11 @@ impl PtyExecutor {
         // Spawn blocking reader thread that sends output via channel
         let (output_tx, mut output_rx) = mpsc::channel::<OutputEvent>(256);
         let should_terminate_reader = Arc::clone(&should_terminate);
-        let tui_output_tx = self.output_tx.clone();
+        let tui_output_tx = if self.output_rx.is_none() {
+            Some(self.output_tx.clone())
+        } else {
+            None
+        };
 
         debug!("Spawning PTY output reader thread (observe mode)");
         std::thread::spawn(move || {
@@ -305,8 +309,10 @@ impl PtyExecutor {
                     }
                     Ok(n) => {
                         let data = buf[..n].to_vec();
-                        // Send to TUI channel
-                        let _ = tui_output_tx.send(data.clone());
+                        // Send to TUI channel if connected
+                        if let Some(ref tx) = tui_output_tx {
+                            let _ = tx.send(data.clone());
+                        }
                         // Send to main loop
                         if output_tx.blocking_send(OutputEvent::Data(data)).is_err() {
                             break;
@@ -421,21 +427,30 @@ impl PtyExecutor {
         // Signal reader thread to stop
         should_terminate.store(true, Ordering::SeqCst);
 
-        // Wait for child to fully exit
-        let status = child.wait().map_err(|e| io::Error::other(e.to_string()))?;
-        let exit_code = status.exit_code() as i32;
+        // Wait for child to fully exit (interruptible + bounded)
+        let status = self
+            .wait_for_exit(&mut child, Some(Duration::from_secs(2)))
+            .await?;
+        let (success, exit_code) = if let Some(status) = status {
+            let exit_code = status.exit_code() as i32;
 
-        // If child was killed by SIGINT (exit code 130), exit Ralph too
-        if exit_code == 130 {
-            info!("Child process killed by SIGINT, exiting Ralph");
-            std::process::exit(130);
-        }
+            // If child was killed by SIGINT (exit code 130), exit Ralph too
+            if exit_code == 130 {
+                info!("Child process killed by SIGINT, exiting Ralph");
+                std::process::exit(130);
+            }
+
+            (status.success(), Some(exit_code))
+        } else {
+            warn!("Timed out waiting for child to exit after termination");
+            (false, None)
+        };
 
         Ok(PtyExecutionResult {
             output: String::from_utf8_lossy(&output).to_string(),
             stripped_output: strip_ansi(&output),
-            success: status.success(),
-            exit_code: Some(exit_code),
+            success,
+            exit_code,
             termination,
         })
     }
@@ -487,7 +502,11 @@ impl PtyExecutor {
         // Spawn output reading task (blocking read wrapped in spawn_blocking via channel)
         let (output_tx, mut output_rx) = mpsc::channel::<OutputEvent>(256);
         let should_terminate_output = Arc::clone(&should_terminate);
-        let tui_output_tx = self.output_tx.clone();
+        let tui_output_tx = if self.output_rx.is_none() {
+            Some(self.output_tx.clone())
+        } else {
+            None
+        };
 
         debug!("Spawning PTY output reader thread");
         std::thread::spawn(move || {
@@ -514,8 +533,10 @@ impl PtyExecutor {
                             first_read = false;
                         }
                         let data = buf[..n].to_vec();
-                        // Send to TUI channel
-                        let _ = tui_output_tx.send(data.clone());
+                        // Send to TUI channel if connected
+                        if let Some(ref tx) = tui_output_tx {
+                            let _ = tx.send(data.clone());
+                        }
                         // Send to main loop
                         if output_tx.blocking_send(OutputEvent::Data(data)).is_err() {
                             debug!("PTY output reader: channel closed");
@@ -642,10 +663,7 @@ impl PtyExecutor {
                             io::stdout().write_all(&data)?;
                             io::stdout().flush()?;
                             output.extend_from_slice(&data);
-                            
-                            // Send to TUI channel if connected
-                            let _ = self.output_tx.send(data);
-                            
+
                             last_activity = Instant::now();
                         }
                         Some(OutputEvent::Eof) => {
@@ -706,9 +724,32 @@ impl PtyExecutor {
                 // TUI input received
                 tui_input = self.input_rx.recv() => {
                     if let Some(data) = tui_input {
-                        let _ = writer.write_all(&data);
-                        let _ = writer.flush();
-                        last_activity = Instant::now();
+                        if data.len() == 1 && data[0] == 3 {
+                            match ctrl_c_state.handle_ctrl_c(Instant::now()) {
+                                CtrlCAction::ForwardAndStartWindow => {
+                                    let _ = writer.write_all(&data);
+                                    let _ = writer.flush();
+                                    last_activity = Instant::now();
+                                }
+                                CtrlCAction::Terminate => {
+                                    info!("Double Ctrl+C detected, terminating");
+                                    termination = TerminationType::UserInterrupt;
+                                    should_terminate.store(true, Ordering::SeqCst);
+                                    self.terminate_child(&mut child, true)?;
+                                    break;
+                                }
+                            }
+                        } else if data.len() == 1 && data[0] == 28 {
+                            info!("Ctrl+\\ detected, force killing");
+                            termination = TerminationType::ForceKill;
+                            should_terminate.store(true, Ordering::SeqCst);
+                            self.terminate_child(&mut child, false)?;
+                            break;
+                        } else {
+                            let _ = writer.write_all(&data);
+                            let _ = writer.flush();
+                            last_activity = Instant::now();
+                        }
                     }
                 }
 
@@ -753,22 +794,30 @@ impl PtyExecutor {
         // Ensure termination flag is set for spawned threads
         should_terminate.store(true, Ordering::SeqCst);
 
-        // Wait for child to fully exit
-        let status = child.wait()
-            .map_err(|e| io::Error::other(e.to_string()))?;
-        let exit_code = status.exit_code() as i32;
+        // Wait for child to fully exit (interruptible + bounded)
+        let status = self
+            .wait_for_exit(&mut child, Some(Duration::from_secs(2)))
+            .await?;
+        let (success, exit_code) = if let Some(status) = status {
+            let exit_code = status.exit_code() as i32;
 
-        // If child was killed by SIGINT (exit code 130), exit Ralph too
-        if exit_code == 130 {
-            info!("Child process killed by SIGINT, exiting Ralph");
-            std::process::exit(130);
-        }
+            // If child was killed by SIGINT (exit code 130), exit Ralph too
+            if exit_code == 130 {
+                info!("Child process killed by SIGINT, exiting Ralph");
+                std::process::exit(130);
+            }
+
+            (status.success(), Some(exit_code))
+        } else {
+            warn!("Timed out waiting for child to exit after termination");
+            (false, None)
+        };
 
         Ok(PtyExecutionResult {
             output: String::from_utf8_lossy(&output).to_string(),
             stripped_output: strip_ansi(&output),
-            success: status.success(),
-            exit_code: Some(exit_code),
+            success,
+            exit_code,
             termination,
         })
     }
@@ -809,6 +858,41 @@ impl PtyExecutor {
         debug!(pid = %pid, "Sending SIGKILL");
         let _ = kill(pid, Signal::SIGKILL);
         Ok(())
+    }
+
+    /// Waits for the child process to exit, optionally with a timeout.
+    ///
+    /// This is interruptible by Ctrl+C in observe mode since tokio registers
+    /// a signal handler; without this loop, Ctrl+C is ignored after termination.
+    async fn wait_for_exit(
+        &self,
+        child: &mut Box<dyn portable_pty::Child + Send>,
+        max_wait: Option<Duration>,
+    ) -> io::Result<Option<portable_pty::ExitStatus>> {
+        let start = Instant::now();
+
+        loop {
+            if let Some(status) = child
+                .try_wait()
+                .map_err(|e| io::Error::other(e.to_string()))?
+            {
+                return Ok(Some(status));
+            }
+
+            if let Some(max) = max_wait {
+                if start.elapsed() >= max {
+                    return Ok(None);
+                }
+            }
+
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {
+                    info!("Ctrl+C received while waiting for child exit, exiting");
+                    std::process::exit(130);
+                }
+                _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+            }
+        }
     }
 }
 

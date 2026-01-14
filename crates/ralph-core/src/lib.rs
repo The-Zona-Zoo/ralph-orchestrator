@@ -15,6 +15,7 @@ mod config;
 mod event_logger;
 mod event_loop;
 mod event_parser;
+mod event_reader;
 mod hat_registry;
 mod instructions;
 mod session_player;
@@ -28,6 +29,7 @@ pub use config::{CliConfig, CoreConfig, EventLoopConfig, EventMetadata, HatConfi
 pub use event_logger::{EventHistory, EventLogger, EventRecord};
 pub use event_loop::{EventLoop, LoopState, TerminationReason};
 pub use event_parser::EventParser;
+pub use event_reader::{Event, EventReader};
 pub use hat_registry::HatRegistry;
 pub use instructions::InstructionBuilder;
 pub use session_player::{PlayerConfig, ReplayMode, SessionPlayer, TimestampedRecord};

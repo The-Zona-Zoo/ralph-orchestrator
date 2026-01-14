@@ -6,7 +6,7 @@ use crate::state::TuiState;
 use crate::widgets::{footer, header, help, terminal::TerminalWidget};
 use anyhow::Result;
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind},
+    event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -139,8 +139,8 @@ impl App {
                                         let is_paused = self.state.lock().unwrap().loop_mode == crate::state::LoopMode::Paused;
                                         if !is_paused {
                                             // Convert key to bytes and send to PTY
-                                            if let KeyCode::Char(c) = key.code {
-                                                let _ = self.input_tx.send(vec![c as u8]);
+                                            if let Some(bytes) = key_event_to_bytes(key) {
+                                                let _ = self.input_tx.send(bytes);
                                             }
                                         }
                                     }
@@ -240,5 +240,37 @@ impl App {
         execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
 
         Ok(())
+    }
+}
+
+fn key_event_to_bytes(key: KeyEvent) -> Option<Vec<u8>> {
+    match key.code {
+        KeyCode::Char(c) => {
+            if key.modifiers.contains(KeyModifiers::CONTROL) {
+                let upper = c.to_ascii_uppercase() as u8;
+                return Some(vec![upper & 0x1f]);
+            }
+            Some(vec![c as u8])
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ctrl_c_maps_to_etx() {
+        let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        let bytes = key_event_to_bytes(key).expect("bytes");
+        assert_eq!(bytes, vec![3]);
+    }
+
+    #[test]
+    fn plain_char_maps_to_byte() {
+        let key = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE);
+        let bytes = key_event_to_bytes(key).expect("bytes");
+        assert_eq!(bytes, vec![b'x']);
     }
 }

@@ -928,9 +928,14 @@ async fn run_loop_impl(config: RalphConfig, color_mode: ColorMode, resume: bool,
 
     // Create PTY executor if using interactive mode
     let mut pty_executor = if use_interactive {
+        let idle_timeout_secs = if config.cli.default_mode == "interactive" {
+            config.cli.idle_timeout_secs
+        } else {
+            0
+        };
         let pty_config = PtyConfig {
             interactive: true,
-            idle_timeout_secs: config.cli.idle_timeout_secs,
+            idle_timeout_secs,
             ..PtyConfig::from_env()
         };
         Some(PtyExecutor::new(backend.clone(), pty_config))
@@ -1104,11 +1109,15 @@ async fn run_loop_impl(config: RalphConfig, color_mode: ColorMode, resume: bool,
             } else {
                 let executor = CliExecutor::new(backend.clone());
                 let result = executor.execute(&prompt, stdout(), timeout).await?;
-                Ok((result.output, result.success))
+                Ok(ExecutionOutcome {
+                    output: result.output,
+                    success: result.success,
+                    termination: None,
+                })
             }
         };
 
-        let (output, success) = tokio::select! {
+        let outcome = tokio::select! {
             result = execute_future => result?,
             _ = interrupt_rx_clone.changed() => {
                 // Immediately terminate children via process group signal
@@ -1133,6 +1142,17 @@ async fn run_loop_impl(config: RalphConfig, color_mode: ColorMode, resume: bool,
                 return Ok(reason);
             }
         };
+
+        if let Some(reason) = outcome.termination {
+            let terminate_event = event_loop.publish_terminate_event(&reason);
+            log_terminate_event(&mut event_logger, event_loop.state().iteration, &terminate_event);
+            handle_termination(&reason, event_loop.state(), &config.core.scratchpad);
+            cleanup_tui(tui_handle);
+            return Ok(reason);
+        }
+
+        let output = outcome.output;
+        let success = outcome.success;
 
         // Log events from output before processing
         log_events_from_output(&mut event_logger, iteration, &hat_id, &output, event_loop.registry());
@@ -1176,13 +1196,19 @@ async fn run_loop_impl(config: RalphConfig, color_mode: ColorMode, resume: bool,
 /// * `config` - Ralph configuration for timeout settings
 /// * `prompt` - The prompt to execute
 /// * `interactive` - The actual execution mode (may differ from config's `default_mode`)
+struct ExecutionOutcome {
+    output: String,
+    success: bool,
+    termination: Option<TerminationReason>,
+}
+
 async fn execute_pty(
     executor: Option<&mut PtyExecutor>,
     backend: &CliBackend,
     config: &RalphConfig,
     prompt: &str,
     interactive: bool,
-) -> Result<(String, bool)> {
+) -> Result<ExecutionOutcome> {
     use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 
     // Use provided executor or create a new one
@@ -1190,9 +1216,14 @@ async fn execute_pty(
     let exec = if let Some(e) = executor {
         e
     } else {
+        let idle_timeout_secs = if config.cli.default_mode == "interactive" {
+            config.cli.idle_timeout_secs
+        } else {
+            0
+        };
         let pty_config = PtyConfig {
             interactive,
-            idle_timeout_secs: config.cli.idle_timeout_secs,
+            idle_timeout_secs,
             ..PtyConfig::from_env()
         };
         temp_executor = PtyExecutor::new(backend.clone(), pty_config);
@@ -1221,8 +1252,24 @@ async fn execute_pty(
 
     match result {
         Ok(pty_result) => {
+            let termination = match pty_result.termination {
+                ralph_adapters::TerminationType::Natural => None,
+                ralph_adapters::TerminationType::IdleTimeout => {
+                    warn!("PTY idle timeout reached, terminating loop");
+                    Some(TerminationReason::Stopped)
+                }
+                ralph_adapters::TerminationType::UserInterrupt
+                | ralph_adapters::TerminationType::ForceKill => {
+                    Some(TerminationReason::Interrupted)
+                }
+            };
+
             // Use stripped output for event parsing (ANSI sequences removed)
-            Ok((pty_result.stripped_output, pty_result.success))
+            Ok(ExecutionOutcome {
+                output: pty_result.stripped_output,
+                success: pty_result.success,
+                termination,
+            })
         }
         Err(e) => {
             // PTY allocation may have failed - log and continue with error
