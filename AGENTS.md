@@ -147,23 +147,6 @@ When modifying `instructions.rs`:
 - Run tests after changes
 - Test manually with a real agent loop to verify behavior
 
-## Running kiro-cli in Headless Mode
-
-Kiro CLI is AWS's agentic coding assistant for the terminal. To run it in fully headless mode (no user interaction):
-
-```bash
-kiro-cli chat --no-interactive --trust-all-tools "Your prompt here"
-```
-### Configuration Paths
-
-| Purpose | Path |
-|---------|------|
-| MCP Servers | `~/.kiro/settings/mcp.json` |
-| Prompts | `~/.kiro/prompts` |
-| Project Config | `.kiro/` (in project root) |
-| Global Config | `~/.kiro/` |
-| Logs | `$TMPDIR/kiro-log` |
-
-
 # IMPORTANT
 - You MUST always run ralph loops in a temp directory so you dont pollute the workspace
+- Backwards compatibility doesn't matter in the current state of the project and just adds clutter, and complexity for no reason. 
