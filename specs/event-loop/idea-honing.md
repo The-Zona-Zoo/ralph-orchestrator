@@ -37,3 +37,36 @@ The shift is from "Ralph wears different hats" to "Ralph delegates to hat-wearin
 
 ## Q2: How should hatless Ralph work in practice?
 
+**Answer:**
+
+The existing pub/sub event system stays — hats can still trigger other hats directly (e.g., researcher → reviewer). But hatless Ralph is always **the ruler**.
+
+**Mental model: Constitutional Monarchy**
+```
+                    ┌─────────────────────────┐
+                    │   👑 HATLESS RALPH      │
+                    │   (The Ruler)           │
+                    │   - Always present      │
+                    │   - Ultimate authority  │
+                    │   - Oversees everything │
+                    └───────────┬─────────────┘
+                                │ oversees
+        ┌───────────────────────┼───────────────────────┐
+        ▼                       ▼                       ▼
+   ┌─────────┐             ┌─────────┐            ┌─────────┐
+   │ Builder │────event───►│ Reviewer│───event───►│ Deployer│
+   └─────────┘             └─────────┘            └─────────┘
+        ▲                                              │
+        └──────────────────event───────────────────────┘
+```
+
+- Hats can still communicate directly via pub/sub
+- Users define triggers/publishes as before
+- BUT: Ralph is always the sovereign — he rules
+
+**Open question:** What does "ruler" mean concretely? (Next question)
+
+---
+
+## Q3: What powers does the ruler have?
+
