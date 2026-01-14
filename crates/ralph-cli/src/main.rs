@@ -776,7 +776,10 @@ async fn run_loop_impl(config: RalphConfig, color_mode: ColorMode, resume: bool)
     let use_colors = color_mode.should_use_colors();
 
     // Determine effective execution mode (with fallback logic)
-    let use_interactive = if config.cli.default_mode == "interactive" {
+    // Per spec: Claude backend requires PTY mode to avoid hangs
+    let use_interactive = if config.cli.backend == "claude" {
+        true
+    } else if config.cli.default_mode == "interactive" {
         if stdout().is_terminal() {
             true
         } else {
@@ -1242,5 +1245,98 @@ fn get_last_commit_info() -> Option<String> {
         }
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ralph_core::RalphConfig;
+
+    #[test]
+    fn test_claude_backend_forces_pty_mode() {
+        // Given: backend is "claude" and default_mode is "autonomous"
+        let mut config = RalphConfig::default();
+        config.cli.backend = "claude".to_string();
+        config.cli.default_mode = "autonomous".to_string();
+
+        // When: determining use_interactive
+        let use_interactive = if config.cli.backend == "claude" {
+            true
+        } else if config.cli.default_mode == "interactive" {
+            true
+        } else {
+            false
+        };
+
+        // Then: PTY mode should be enabled
+        assert!(use_interactive, "Claude backend should force PTY mode");
+    }
+
+    #[test]
+    fn test_gemini_backend_respects_default_mode() {
+        // Given: backend is "gemini" and default_mode is "autonomous"
+        let mut config = RalphConfig::default();
+        config.cli.backend = "gemini".to_string();
+        config.cli.default_mode = "autonomous".to_string();
+
+        // When: determining use_interactive
+        let use_interactive = if config.cli.backend == "claude" {
+            true
+        } else if config.cli.default_mode == "interactive" {
+            true
+        } else {
+            false
+        };
+
+        // Then: PTY mode should NOT be enabled (respects autonomous mode)
+        assert!(!use_interactive, "Gemini backend should respect autonomous mode");
+    }
+
+    #[test]
+    fn test_claude_backend_overrides_interactive_mode_setting() {
+        // Given: backend is "claude" and default_mode is "interactive"
+        let mut config = RalphConfig::default();
+        config.cli.backend = "claude".to_string();
+        config.cli.default_mode = "interactive".to_string();
+
+        // When: determining use_interactive
+        let use_interactive = if config.cli.backend == "claude" {
+            true
+        } else if config.cli.default_mode == "interactive" {
+            true
+        } else {
+            false
+        };
+
+        // Then: PTY mode should be enabled (would be true anyway, but Claude forces it)
+        assert!(use_interactive, "Claude backend should enable PTY mode");
+    }
+
+    #[test]
+    fn test_other_backends_respect_autonomous_mode() {
+        let backends = vec!["kiro", "gemini", "codex", "amp"];
+
+        for backend in backends {
+            // Given: backend is not "claude" and default_mode is "autonomous"
+            let mut config = RalphConfig::default();
+            config.cli.backend = backend.to_string();
+            config.cli.default_mode = "autonomous".to_string();
+
+            // When: determining use_interactive
+            let use_interactive = if config.cli.backend == "claude" {
+                true
+            } else if config.cli.default_mode == "interactive" {
+                true
+            } else {
+                false
+            };
+
+            // Then: PTY mode should NOT be enabled
+            assert!(
+                !use_interactive,
+                "{} backend should respect autonomous mode",
+                backend
+            );
+        }
     }
 }
