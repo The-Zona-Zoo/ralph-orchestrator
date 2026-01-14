@@ -8,5 +8,6 @@
 //! - Keyboard navigation and input handling
 
 mod state;
+mod widgets;
 
 pub use state::TuiState;

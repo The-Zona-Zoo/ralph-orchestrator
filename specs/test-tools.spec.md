@@ -1,6 +1,6 @@
 ---
-status: draft
-gap_analysis: null
+status: review
+gap_analysis: 2026-01-13
 related:
   - event-loop.spec.md
   - benchmark-harness.spec.md
@@ -45,12 +45,22 @@ To validate Ralph Orchestrator behavior at scale, we need automated E2E testing.
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                       Test Tools                                 │
+│                                                                  │
+│  v1 Core:                                                        │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐           │
 │  │  setup   │ │   run    │ │  assert  │ │  inspect │           │
 │  └──────────┘ └──────────┘ └──────────┘ └──────────┘           │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐           │
 │  │  record  │ │  replay  │ │ evaluate │ │  report  │           │
 │  └──────────┘ └──────────┘ └──────────┘ └──────────┘           │
+│  ┌──────────┐                                                   │
+│  │ cleanup  │                                                   │
+│  └──────────┘                                                   │
+│                                                                  │
+│  v2 Optional:                                                    │
+│  ┌──────────┐ ┌──────────┐                                      │
+│  │ snapshot │ │   diff   │  (can use git instead)              │
+│  └──────────┘ └──────────┘                                      │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -66,6 +76,22 @@ To validate Ralph Orchestrator behavior at scale, we need automated E2E testing.
 │  └─────────────┘  └─────────────┘                              │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+### Tool Summary
+
+| Tool | Purpose | Priority |
+|------|---------|----------|
+| `test_setup` | Create isolated workspace with fixtures | v1 Core |
+| `test_run` | Execute Ralph, record session (includes mock config) | v1 Core |
+| `test_assert` | Validate outcomes with 14 assertion types | v1 Core |
+| `test_inspect` | Query session recordings | v1 Core |
+| `test_cleanup` | Remove workspace | v1 Core |
+| `test_record` | Capture real LLM interactions (VCR) | v1 Core |
+| `test_replay` | Replay cassettes deterministically | v1 Core |
+| `test_evaluate` | LLM-as-judge via meta preset | v1 Core |
+| `test_report` | Generate JUnit/TAP for CI/CD | v1 Core |
+| `test_snapshot` | Capture workspace state | v2 Optional |
+| `test_diff` | Compare snapshots | v2 Optional |
 
 ### Testing Modes
 
@@ -338,7 +364,9 @@ Captures current workspace state for comparison or archival.
 
 ---
 
-### 8. `test_diff`
+### 8. `test_diff` *(Optional - defer to v2)*
+
+> **Note:** Diff functionality can be achieved with `git diff` in the workspace. This tool is specified for convenience but may be deferred.
 
 Compares two snapshots or a snapshot against current state.
 
@@ -463,7 +491,8 @@ Uses LLM-as-judge to evaluate subjective criteria with rubrics. **Implemented vi
 |------|------|----------|-------------|
 | `criterion` | string | yes | What to evaluate: `plan_quality`, `code_quality`, `task_completion`, `custom` |
 | `target` | string | yes | What to evaluate: `scratchpad`, `file:<path>`, `session`, `output` |
-| `rubric` | object | no | Scoring rubric with descriptions per level |
+| `rubric` | object | no | Scoring rubric with descriptions per level (1-5) |
+| `threshold` | integer | no | Minimum score to pass (default: see Built-in Criteria table) |
 | `reference` | string | no | Gold-standard reference for comparison |
 | `custom_prompt` | string | no | Custom evaluation prompt (for criterion=custom) |
 
@@ -660,11 +689,39 @@ metadata:
 
 ### Cassette Matching
 
-During replay, requests are matched using:
+During replay, requests are matched using a multi-stage algorithm:
 
-1. **Hat match** - Same hat must be active
-2. **Prompt hash** - SHA256 of normalized prompt (after redactions)
-3. **Sequence position** - Fallback to positional matching if hashes differ slightly
+**Stage 1: Positional Match (Default)**
+- Match by sequence position within each hat
+- First planner request → first planner response in cassette
+- Most lenient, handles minor prompt variations
+
+**Stage 2: Hash Match (when `strict: true`)**
+1. Normalize the prompt (apply redactions, strip whitespace)
+2. Compute SHA256 hash
+3. Compare against recorded prompt hash
+4. Fail if mismatch, showing diff preview
+
+**Normalization Rules:**
+- Redaction patterns applied (timestamps, UUIDs, paths)
+- Leading/trailing whitespace trimmed
+- Multiple consecutive whitespaces collapsed
+- Line endings normalized to `\n`
+
+**Example Mismatch Error:**
+```
+Replay mismatch at interaction 2 (hat: builder)
+Expected hash: sha256:abc123...
+Actual hash:   sha256:def456...
+
+Prompt diff (first 500 chars):
+- ## Build Task (recorded)
++ ## Build Task (current)
+- Implement auth for user_abc123
++ Implement auth for user_xyz789
+          ^^^^^^^^^^^^^^^^^^^^^^
+Hint: Add redaction for user IDs: {"patterns": {"user_id": "user_[a-z0-9]+"}}
+```
 
 ## Mock Backend Specification
 
@@ -706,27 +763,25 @@ The mock backend enables deterministic E2E tests without real LLM calls.
    - workspace_id: "planner_test_001"
    - scratchpad: "## Plan\n(empty)"
 
-2. test_mock_backend
-   - responses: [
-       {hat: "planner", output: "<event topic=\"build.task\">...</event>"}
-     ]
-
-3. test_run
+2. test_run
    - task: "Implement user authentication"
    - backend: "mock"
    - max_iterations: 1
+   - mock_responses: [
+       {hat: "planner", output: "<event topic=\"build.task\">...</event>"}
+     ]
 
-4. test_assert
+3. test_assert
    - assertions: [
        {type: "exit_code", expected: 2},  // MaxIterations, not CompletionPromise
        {type: "event_occurred", topic: "build.task"},
        {type: "event_sequence", topics: ["task.start", "build.task"]}
      ]
 
-5. test_inspect
+4. test_inspect
    - format: "timeline"
 
-6. test_cleanup
+5. test_cleanup
 ```
 
 ---
@@ -833,32 +888,38 @@ The mock backend enables deterministic E2E tests without real LLM calls.
 
 ---
 
-### Scenario 4: Trace-Based Testing
+### Scenario 4: Execution Flow Testing
 
-**Scenario: Verify agent execution flow through traces**
+**Scenario: Verify agent execution flow through events and hat transitions**
 
 ```
 1. test_setup
-   - workspace_id: "trace_test"
+   - workspace_id: "flow_test"
 
 2. test_run
    - task: "Add error handling to the API"
    - backend: "mock"
-   - mock_responses: [...]
+   - mock_responses: [
+       {hat: "planner", output: "<event topic=\"build.task\">Add try/catch blocks</event>"},
+       {hat: "builder", output: "<event topic=\"build.done\">Implemented error handling</event>"}
+     ]
 
 3. test_assert
    - assertions: [
-       # Traditional assertions
+       # Exit status
        {type: "exit_code", expected: 0},
 
-       # Trace-based assertions (from research)
+       # Hat flow assertions (from _meta.iteration events)
        {type: "hat_transition", from: "planner", to: "builder"},
-       {type: "trace_span_sequence", names: ["plan", "implement", "verify"]},
-       {type: "tool_called", tool: "write_file", args_pattern: ".*error.*"},
+       {type: "hat_sequence", hats: ["planner", "builder"]},
+       {type: "iteration_count", hat: "planner", exact: 1},
 
        # Event-based assertions
        {type: "event_sequence", topics: ["task.start", "build.task", "build.done"]},
-       {type: "no_event", topic: "build.blocked"}  # No thrashing
+       {type: "no_event", topic: "build.blocked"},  # No thrashing
+
+       # Output assertions
+       {type: "stdout_contains", pattern: "error handling"}
      ]
 
 4. test_inspect
@@ -1127,7 +1188,7 @@ Assertions understand EventBus semantics:
 - **Then** session.jsonl path is included in output
 - **And** trace can be used for debugging
 
-### Trace-Based Assertions
+### Hat and Flow Assertions
 
 - **Given** a session with multiple hat transitions
 - **When** `test_assert` checks `{type: "hat_transition", from: "planner", to: "builder"}`
@@ -1136,10 +1197,21 @@ Assertions understand EventBus semantics:
 
 ---
 
-- **Given** a session where agent called tools
-- **When** `test_assert` checks `{type: "tool_called", tool: "write_file"}`
-- **Then** assertion passes if tool was invoked
-- **And** args_pattern can filter by arguments
+- **Given** a session where planner ran twice then builder once
+- **When** `test_assert` checks `{type: "hat_sequence", hats: ["planner", "planner", "builder"]}`
+- **Then** assertion passes (exact sequence match)
+
+---
+
+- **Given** a session with 3 planner iterations
+- **When** `test_assert` checks `{type: "iteration_count", hat: "planner", min: 2, max: 5}`
+- **Then** assertion passes (3 is within range)
+
+---
+
+- **Given** stdout containing "Successfully completed"
+- **When** `test_assert` checks `{type: "stdout_contains", pattern: "Successfully.*"}`
+- **Then** assertion passes (regex match)
 
 ## Retry and Flakiness Handling
 
