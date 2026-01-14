@@ -163,8 +163,12 @@ impl PtyExecutor {
         Self { backend, config }
     }
 
-    /// Spawns Claude in a PTY and returns the PTY pair and child process.
-    fn spawn_pty(&self, prompt: &str) -> io::Result<(PtyPair, Box<dyn portable_pty::Child + Send>)> {
+    /// Spawns Claude in a PTY and returns the PTY pair, child process, and temp file (if any).
+    ///
+    /// The temp file is returned to keep it alive for the duration of execution.
+    /// For large prompts (>7000 chars), Claude is instructed to read from a temp file.
+    /// If the temp file is dropped before Claude reads it, the file is deleted and Claude hangs.
+    fn spawn_pty(&self, prompt: &str) -> io::Result<(PtyPair, Box<dyn portable_pty::Child + Send>, Option<tempfile::NamedTempFile>)> {
         let pty_system = native_pty_system();
 
         let pair = pty_system
@@ -176,7 +180,7 @@ impl PtyExecutor {
             })
             .map_err(|e| io::Error::other(e.to_string()))?;
 
-        let (cmd, args, stdin_input, _temp_file) = self.backend.build_command(prompt, self.config.interactive);
+        let (cmd, args, stdin_input, temp_file) = self.backend.build_command(prompt, self.config.interactive);
 
         let mut cmd_builder = CommandBuilder::new(&cmd);
         cmd_builder.args(&args);
@@ -189,19 +193,29 @@ impl PtyExecutor {
         // Set up environment for PTY
         cmd_builder.env("TERM", "xterm-256color");
 
-        debug!(
+        // Log at info level to help debug hangs
+        info!(
             command = %cmd,
-            args = ?args,
+            args_count = args.len(),
+            prompt_len = prompt.len(),
             cwd = ?cwd,
             cols = self.config.cols,
             rows = self.config.rows,
+            has_temp_file = temp_file.is_some(),
             "Spawning process in PTY"
         );
+        // Show first 100 chars of each arg to help debug
+        for (i, arg) in args.iter().enumerate() {
+            let preview: String = arg.chars().take(100).collect();
+            debug!(arg_index = i, arg_preview = %preview, arg_len = arg.len(), "Command argument");
+        }
 
         let child = pair
             .slave
             .spawn_command(cmd_builder)
             .map_err(|e| io::Error::other(e.to_string()))?;
+
+        info!(pid = ?child.process_id(), "Child process spawned");
 
         // If we need to write to stdin, do it now
         if let Some(input) = stdin_input {
@@ -210,7 +224,7 @@ impl PtyExecutor {
             writer.write_all(input.as_bytes())?;
         }
 
-        Ok((pair, child))
+        Ok((pair, child, temp_file))
     }
 
     /// Runs in observe mode (output-only, no input forwarding).
@@ -222,7 +236,8 @@ impl PtyExecutor {
     /// Returns an error if PTY allocation fails, the command cannot be spawned,
     /// or an I/O error occurs during output handling.
     pub fn run_observe(&self, prompt: &str) -> io::Result<PtyExecutionResult> {
-        let (pair, mut child) = self.spawn_pty(prompt)?;
+        // Keep temp_file alive for the duration of execution (large prompts use temp files)
+        let (pair, mut child, _temp_file) = self.spawn_pty(prompt)?;
 
         let mut reader = pair.master.try_clone_reader()
             .map_err(|e| io::Error::other(e.to_string()))?;
@@ -346,7 +361,8 @@ impl PtyExecutor {
     /// or an I/O error occurs during bidirectional communication.
     #[allow(clippy::too_many_lines)] // Complex state machine requires cohesive implementation
     pub async fn run_interactive(&self, prompt: &str) -> io::Result<PtyExecutionResult> {
-        let (pair, mut child) = self.spawn_pty(prompt)?;
+        // Keep temp_file alive for the duration of execution (large prompts use temp files)
+        let (pair, mut child, _temp_file) = self.spawn_pty(prompt)?;
 
         let reader = pair.master.try_clone_reader()
             .map_err(|e| io::Error::other(e.to_string()))?;
@@ -374,23 +390,33 @@ impl PtyExecutor {
         let (output_tx, mut output_rx) = mpsc::channel::<OutputEvent>(256);
         let should_terminate_output = Arc::clone(&should_terminate);
 
+        debug!("Spawning PTY output reader thread");
         std::thread::spawn(move || {
+            debug!("PTY output reader thread started");
             let mut reader = reader;
             let mut buf = [0u8; 4096];
+            let mut first_read = true;
 
             loop {
                 if should_terminate_output.load(Ordering::SeqCst) {
+                    debug!("PTY output reader: termination requested");
                     break;
                 }
 
                 match reader.read(&mut buf) {
                     Ok(0) => {
                         // EOF - PTY closed
+                        debug!("PTY output reader: EOF received");
                         let _ = output_tx.blocking_send(OutputEvent::Eof);
                         break;
                     }
                     Ok(n) => {
+                        if first_read {
+                            info!("PTY output reader: first data received ({} bytes)", n);
+                            first_read = false;
+                        }
                         if output_tx.blocking_send(OutputEvent::Data(buf[..n].to_vec())).is_err() {
+                            debug!("PTY output reader: channel closed");
                             break;
                         }
                     }
@@ -402,11 +428,13 @@ impl PtyExecutor {
                         // Interrupted by signal, retry
                     }
                     Err(e) => {
+                        warn!("PTY output reader: error - {}", e);
                         let _ = output_tx.blocking_send(OutputEvent::Error(e.to_string()));
                         break;
                     }
                 }
             }
+            debug!("PTY output reader thread exiting");
         });
 
         // Spawn input reading task

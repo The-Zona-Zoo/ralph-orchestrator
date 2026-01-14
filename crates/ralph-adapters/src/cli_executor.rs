@@ -51,6 +51,8 @@ impl CliExecutor {
         mut output_writer: W,
         timeout: Option<Duration>,
     ) -> std::io::Result<ExecutionResult> {
+        // Note: _temp_file is kept alive for the duration of this function scope.
+        // For large prompts (>7000 chars), Claude reads from the temp file.
         let (cmd, args, stdin_input, _temp_file) = self.backend.build_command(prompt, false);
 
         let mut command = Command::new(&cmd);

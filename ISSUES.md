@@ -3,14 +3,17 @@
 > Analysis date: 2026-01-14
 > Specs analyzed: 19
 > Previous analysis: 2026-01-13
+> Hat collections manual testing: 2026-01-14
 
 ## Summary
 
 | Priority | Issue | Spec | Status |
 |----------|-------|------|--------|
+| 🔴 P0 | 3 presets fail preflight_check (orphan terminal events) | hat-collections.spec.md | NEW |
 | 🟡 P1 | Backend flag filtering uses config default, not execution mode | interactive-mode.spec.md | NEW |
 | 🟡 P1 | Reachability validation not implemented | hat-collections.spec.md | PLANNED |
 | 🟡 P1 | Observer not wired to EventBus during benchmark runs | benchmark-harness.spec.md | TODO |
+| 🟡 P1 | Empty hats collection {} passes validation (should fail) | hat-collections.spec.md | NEW |
 | 🟢 P2 | Custom hat emoji/registry integration missing | terminal-ui.spec.md | MINOR |
 | 🟢 P2 | recovery_hat configuration field missing | hat-collections.spec.md | PLANNED |
 | 🟢 P2 | terminal_events configuration field missing | hat-collections.spec.md | PLANNED |
@@ -18,6 +21,7 @@
 | 🟢 P2 | Benchmark export formats not implemented | benchmark-ux.spec.md | PLANNED |
 | 🟡 P1 | Behavioral verification catalog not implemented (0/78) | behavioral-verification.spec.md | PLANNED |
 | 🔵 P3 | 6 specs missing frontmatter | Various | DOCS |
+| 🔵 P3 | Empty hat name string allowed (should be rejected) | hat-collections.spec.md | NEW |
 
 ### Resolved Since 2026-01-13
 
@@ -31,6 +35,70 @@ The following P0 issues from the previous analysis have been **fixed**:
 | Per-adapter timeout not enforced | ✅ Fixed: `cli_executor.rs` reads and enforces per-adapter timeout |
 | CLI executor working directory not set | ✅ Fixed: Both CLI and PTY executors explicitly set `current_dir()` |
 | Interactive idle timeout doesn't reset | ✅ Fixed: Resets on both agent output AND user input |
+
+---
+
+## Hat Collections Manual Testing Results (2026-01-14)
+
+### Presets Tested
+
+| Preset | validate() | preflight_check() | Issues |
+|--------|-----------|-------------------|--------|
+| feature.yml | ✅ | ✅ | None |
+| feature-minimal.yml | ✅ | ✅ | None |
+| research.yml | ✅ | ❌ | Orphan: `synthesis.complete`, `research.question` |
+| docs.yml | ✅ | ✅ | None |
+| debug.yml | ✅ | ❌ | Orphan: `hypothesis.confirmed`, `fix.blocked`, `fix.failed` |
+| refactor.yml | ✅ | ✅ | None |
+| review.yml | ✅ | ❌ | Orphan: `review.complete` |
+| deploy.yml | ✅ | ✅ | None |
+| gap-analysis.yml | ✅ | ✅ | None |
+
+### Issue: Orphan Terminal Events in Presets (P0)
+
+**Problem:** Three presets (`research.yml`, `debug.yml`, `review.yml`) fail `preflight_check()` because they publish events intended as workflow completion signals, but the validator treats them as errors.
+
+**Spec Reference:** hat-collections.spec.md lines 64-78 describe user-declared terminal events:
+```yaml
+event_loop:
+  terminal_events:
+    - "deploy.complete"     # Custom terminal event
+```
+
+**Current Behavior:** Only `LOOP_COMPLETE` and `completion_promise` are exempted from orphan detection.
+
+**Expected Behavior:** Events in `terminal_events` list should also be exempted.
+
+**Root Cause:** `terminal_events` config field is not implemented in `EventLoopConfig`.
+
+**Affected Presets:**
+- `research.yml`: publishes `synthesis.complete` and `research.question` (intentional hand-off points)
+- `debug.yml`: publishes `hypothesis.confirmed`, `fix.blocked`, `fix.failed` (intentional stuck-state signals)
+- `review.yml`: publishes `review.complete` (intentional completion signal)
+
+### Validation Edge Cases Tested
+
+| Test Case | validate() | preflight_check() | Expected | Notes |
+|-----------|-----------|-------------------|----------|-------|
+| Empty hats `{}` | ✅ pass | ✅ pass | ❌ fail | Spec says "collection cannot be empty" |
+| No entry point | ✅ pass | ❌ fail | ❌ fail | Correctly rejected |
+| Ambiguous routing | ❌ fail | - | ❌ fail | Correctly rejected |
+| Orphan event | ✅ pass | ❌ fail | ❌ fail | Correctly rejected |
+| Unreachable hat | ✅ pass | ⚠️ partial | ❌ fail | Only catches orphan, not unreachability |
+| Missing task.resume | ✅ pass | ✅ pass | ⚠️ warn | Spec says multi-hat needs recovery hat |
+| Self-routing | ✅ pass | ✅ pass | ✅ pass | Correctly allowed |
+| Circular flow | ✅ pass | ✅ pass | ✅ pass | Correctly allowed |
+| Custom completion | ✅ pass | ✅ pass | ✅ pass | Correctly terminal |
+| Hat missing name | ❌ parse | - | ❌ fail | Correctly rejected |
+| Empty name string | ✅ pass | ✅ pass | ❌ fail | Should validate name |
+
+### Recommendations
+
+1. **P0: Implement `terminal_events` config field** — Unblocks 3 presets from failing validation
+2. **P1: Reject empty hats collection** — Currently `hats: {}` passes but spec says must have ≥1 hat
+3. **P1: Implement reachability check (DFS)** — Currently only orphan detection, not graph traversal
+4. **P2: Warn on missing `task.resume` for multi-hat** — Spec requires recovery hat validation
+5. **P3: Validate empty hat name** — `name: ""` should be rejected
 
 ---
 
