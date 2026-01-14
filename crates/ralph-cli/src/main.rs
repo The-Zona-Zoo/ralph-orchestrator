@@ -823,9 +823,7 @@ async fn run_loop_impl(config: RalphConfig, color_mode: ColorMode, resume: bool,
 
     // Determine effective execution mode (with fallback logic)
     // Per spec: Claude backend requires PTY mode to avoid hangs
-    let use_interactive = if config.cli.backend == "claude" {
-        true
-    } else if config.cli.default_mode == "interactive" {
+    let user_interactive = if config.cli.default_mode == "interactive" {
         if stdout().is_terminal() {
             true
         } else {
@@ -835,6 +833,7 @@ async fn run_loop_impl(config: RalphConfig, color_mode: ColorMode, resume: bool,
     } else {
         false
     };
+    let use_pty = config.cli.backend == "claude" || user_interactive;
 
     // Set up signal handling for immediate termination
     // Per spec:
@@ -927,14 +926,10 @@ async fn run_loop_impl(config: RalphConfig, color_mode: ColorMode, resume: bool,
         .map_err(|e| anyhow::Error::new(e))?;
 
     // Create PTY executor if using interactive mode
-    let mut pty_executor = if use_interactive {
-        let idle_timeout_secs = if config.cli.default_mode == "interactive" {
-            config.cli.idle_timeout_secs
-        } else {
-            0
-        };
+    let mut pty_executor = if use_pty {
+        let idle_timeout_secs = if user_interactive { config.cli.idle_timeout_secs } else { 0 };
         let pty_config = PtyConfig {
-            interactive: true,
+            interactive: user_interactive,
             idle_timeout_secs,
             ..PtyConfig::from_env()
         };
@@ -944,7 +939,7 @@ async fn run_loop_impl(config: RalphConfig, color_mode: ColorMode, resume: bool,
     };
 
     // Wire TUI to PTY executor if both are enabled
-    let enable_tui = enable_tui && pty_executor.is_some();
+    let enable_tui = enable_tui && user_interactive && pty_executor.is_some();
     let tui_handle = if enable_tui {
         let mut tui = Tui::new();
         
@@ -973,7 +968,7 @@ async fn run_loop_impl(config: RalphConfig, color_mode: ColorMode, resume: bool,
     };
 
     // Log execution mode - hat info already logged by initialize()
-    let exec_mode = if use_interactive { "interactive" } else { "autonomous" };
+    let exec_mode = if user_interactive { "interactive" } else { "autonomous" };
     debug!(execution_mode = %exec_mode, "Execution mode configured");
 
     // Track the last hat to detect hat changes for logging
@@ -1104,8 +1099,8 @@ async fn run_loop_impl(config: RalphConfig, color_mode: ColorMode, resume: bool,
         // Race execution against interrupt signal for immediate termination on Ctrl+C
         let mut interrupt_rx_clone = interrupt_rx.clone();
         let execute_future = async {
-            if use_interactive {
-                execute_pty(pty_executor.as_mut(), &backend, &config, &prompt, use_interactive).await
+            if use_pty {
+                execute_pty(pty_executor.as_mut(), &backend, &config, &prompt, user_interactive).await
             } else {
                 let executor = CliExecutor::new(backend.clone());
                 let result = executor.execute(&prompt, stdout(), timeout).await?;
@@ -1216,11 +1211,7 @@ async fn execute_pty(
     let exec = if let Some(e) = executor {
         e
     } else {
-        let idle_timeout_secs = if config.cli.default_mode == "interactive" {
-            config.cli.idle_timeout_secs
-        } else {
-            0
-        };
+        let idle_timeout_secs = if interactive { config.cli.idle_timeout_secs } else { 0 };
         let pty_config = PtyConfig {
             interactive,
             idle_timeout_secs,
@@ -1400,17 +1391,13 @@ mod tests {
         config.cli.backend = "claude".to_string();
         config.cli.default_mode = "autonomous".to_string();
 
-        // When: determining use_interactive
-        let use_interactive = if config.cli.backend == "claude" {
-            true
-        } else if config.cli.default_mode == "interactive" {
-            true
-        } else {
-            false
-        };
+        let stdout_is_tty = true;
+        let user_interactive = config.cli.default_mode == "interactive" && stdout_is_tty;
+        let use_pty = config.cli.backend == "claude" || user_interactive;
 
         // Then: PTY mode should be enabled
-        assert!(use_interactive, "Claude backend should force PTY mode");
+        assert!(use_pty, "Claude backend should force PTY mode");
+        assert!(!user_interactive, "Autonomous mode should not be interactive");
     }
 
     #[test]
@@ -1420,17 +1407,13 @@ mod tests {
         config.cli.backend = "gemini".to_string();
         config.cli.default_mode = "autonomous".to_string();
 
-        // When: determining use_interactive
-        let use_interactive = if config.cli.backend == "claude" {
-            true
-        } else if config.cli.default_mode == "interactive" {
-            true
-        } else {
-            false
-        };
+        let stdout_is_tty = true;
+        let user_interactive = config.cli.default_mode == "interactive" && stdout_is_tty;
+        let use_pty = config.cli.backend == "claude" || user_interactive;
 
         // Then: PTY mode should NOT be enabled (respects autonomous mode)
-        assert!(!use_interactive, "Gemini backend should respect autonomous mode");
+        assert!(!use_pty, "Gemini backend should respect autonomous mode");
+        assert!(!user_interactive, "Autonomous mode should not be interactive");
     }
 
     #[test]
@@ -1440,17 +1423,13 @@ mod tests {
         config.cli.backend = "claude".to_string();
         config.cli.default_mode = "interactive".to_string();
 
-        // When: determining use_interactive
-        let use_interactive = if config.cli.backend == "claude" {
-            true
-        } else if config.cli.default_mode == "interactive" {
-            true
-        } else {
-            false
-        };
+        let stdout_is_tty = true;
+        let user_interactive = config.cli.default_mode == "interactive" && stdout_is_tty;
+        let use_pty = config.cli.backend == "claude" || user_interactive;
 
         // Then: PTY mode should be enabled (would be true anyway, but Claude forces it)
-        assert!(use_interactive, "Claude backend should enable PTY mode");
+        assert!(use_pty, "Claude backend should enable PTY mode");
+        assert!(user_interactive, "Interactive mode should be enabled");
     }
 
     #[test]
@@ -1463,21 +1442,17 @@ mod tests {
             config.cli.backend = backend.to_string();
             config.cli.default_mode = "autonomous".to_string();
 
-            // When: determining use_interactive
-            let use_interactive = if config.cli.backend == "claude" {
-                true
-            } else if config.cli.default_mode == "interactive" {
-                true
-            } else {
-                false
-            };
+            let stdout_is_tty = true;
+            let user_interactive = config.cli.default_mode == "interactive" && stdout_is_tty;
+            let use_pty = config.cli.backend == "claude" || user_interactive;
 
             // Then: PTY mode should NOT be enabled
             assert!(
-                !use_interactive,
+                !use_pty,
                 "{} backend should respect autonomous mode",
                 backend
             );
+            assert!(!user_interactive, "Autonomous mode should not be interactive");
         }
     }
 }
