@@ -53,6 +53,11 @@ core:
 #       If good: publish review.done
 #       If problems: publish review.rejected with specific feedback
 
+# Adapter-specific settings
+adapters:
+  kiro:
+    timeout: 900              # 15 minutes for CLI execution
+
 # Feature flags
 git_checkpoint: true
 verbose: false

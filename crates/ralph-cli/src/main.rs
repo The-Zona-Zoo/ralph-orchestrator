@@ -160,8 +160,7 @@ struct RunArgs {
     // Execution Mode Options
     // ─────────────────────────────────────────────────────────────────────────
 
-    /// Enable interactive mode (PTY with user input forwarding).
-    /// User can interact with the agent through Ralph.
+    /// Enable interactive TUI mode for real-time monitoring
     #[arg(short, long, conflicts_with = "autonomous")]
     interactive: bool,
 
@@ -176,8 +175,8 @@ struct RunArgs {
     #[arg(long)]
     idle_timeout: Option<u32>,
 
-    /// Enable terminal UI for real-time monitoring
-    #[arg(long)]
+    /// [DEPRECATED] Use -i/--interactive instead
+    #[arg(long, hide = true)]
     tui: bool,
 }
 
@@ -191,7 +190,7 @@ struct ResumeArgs {
     #[arg(long)]
     max_iterations: Option<u32>,
 
-    /// Enable interactive mode
+    /// Enable interactive TUI mode for real-time monitoring
     #[arg(short, long, conflicts_with = "autonomous")]
     interactive: bool,
 
@@ -203,8 +202,8 @@ struct ResumeArgs {
     #[arg(long)]
     idle_timeout: Option<u32>,
 
-    /// Enable terminal UI for real-time monitoring
-    #[arg(long)]
+    /// [DEPRECATED] Use -i/--interactive instead
+    #[arg(long, hide = true)]
     tui: bool,
 }
 
@@ -261,7 +260,7 @@ async fn main() -> Result<()> {
                 interactive: false,
                 autonomous: false,
                 idle_timeout: None,
-                tui: false,
+                tui: false, // No TUI by default
             };
             run_command(cli.config, cli.verbose, cli.color, args).await
         }
@@ -274,6 +273,11 @@ async fn run_command(
     color_mode: ColorMode,
     args: RunArgs,
 ) -> Result<()> {
+    // Show deprecation warning if --tui is used
+    if args.tui {
+        eprintln!("⚠️  Warning: --tui flag is deprecated. Use -i or --interactive instead.");
+    }
+
     // Load configuration
     let mut config = if config_path.exists() {
         RalphConfig::from_file(&config_path)
@@ -390,7 +394,8 @@ async fn run_command(
     }
 
     // Run the orchestration loop and exit with proper exit code
-    let reason = run_loop(config, color_mode, args.tui).await?;
+    let enable_tui = args.interactive || args.tui; // Support both for backward compat
+    let reason = run_loop(config, color_mode, enable_tui).await?;
     let exit_code = reason.exit_code();
 
     // Use explicit exit for non-zero codes to ensure proper exit status
@@ -412,6 +417,11 @@ async fn resume_command(
     color_mode: ColorMode,
     args: ResumeArgs,
 ) -> Result<()> {
+    // Show deprecation warning if --tui is used
+    if args.tui {
+        eprintln!("⚠️  Warning: --tui flag is deprecated. Use -i or --interactive instead.");
+    }
+
     // Load configuration
     let mut config = if config_path.exists() {
         RalphConfig::from_file(&config_path)
@@ -496,7 +506,8 @@ async fn resume_command(
     // Run the orchestration loop in resume mode
     // The key difference: we publish task.resume instead of task.start,
     // signaling the planner to read the existing scratchpad
-    let reason = run_loop_impl(config, color_mode, true, args.tui).await?;
+    let enable_tui = args.interactive || args.tui; // Support both for backward compat
+    let reason = run_loop_impl(config, color_mode, true, enable_tui).await?;
     let exit_code = reason.exit_code();
 
     if exit_code != 0 {
