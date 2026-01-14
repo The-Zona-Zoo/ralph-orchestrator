@@ -1064,7 +1064,7 @@ async fn run_loop_impl(config: RalphConfig, color_mode: ColorMode, resume: bool,
         let timeout = Some(Duration::from_secs(timeout_secs));
 
         let (output, success) = if use_interactive {
-            execute_pty(&backend, &config, &prompt).await?
+            execute_pty(&backend, &config, &prompt, use_interactive).await?
         } else {
             let executor = CliExecutor::new(backend.clone());
             let result = executor.execute(&prompt, stdout(), timeout).await?;
@@ -1123,17 +1123,24 @@ async fn run_loop_impl(config: RalphConfig, color_mode: ColorMode, resume: bool,
 }
 
 /// Executes a prompt in PTY mode with raw terminal handling.
+///
+/// # Arguments
+/// * `backend` - The CLI backend to use for command building
+/// * `config` - Ralph configuration for timeout settings
+/// * `prompt` - The prompt to execute
+/// * `interactive` - The actual execution mode (may differ from config's `default_mode`)
 async fn execute_pty(
     backend: &CliBackend,
     config: &RalphConfig,
     prompt: &str,
+    interactive: bool,
 ) -> Result<(String, bool)> {
     use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 
-    // Create PTY config from ralph config
-    let is_interactive = config.cli.default_mode == "interactive";
+    // Create PTY config with the actual execution mode
+    // Per interactive-mode.spec.md: "Agent flags are determined by execution mode, not config default"
     let pty_config = PtyConfig {
-        interactive: is_interactive,
+        interactive,
         idle_timeout_secs: config.cli.idle_timeout_secs,
         ..PtyConfig::from_env()
     };
@@ -1141,19 +1148,19 @@ async fn execute_pty(
     let executor = PtyExecutor::new(backend.clone(), pty_config);
 
     // Enter raw mode for interactive mode to capture keystrokes
-    if is_interactive {
+    if interactive {
         enable_raw_mode().context("Failed to enable raw mode")?;
     }
 
     // Use scopeguard to ensure raw mode is restored on any exit path
-    let _guard = scopeguard::guard(is_interactive, |interactive| {
-        if interactive {
+    let _guard = scopeguard::guard(interactive, |is_interactive| {
+        if is_interactive {
             let _ = disable_raw_mode();
         }
     });
 
     // Run PTY executor
-    let result = if is_interactive {
+    let result = if interactive {
         executor.run_interactive(prompt).await
     } else {
         executor.run_observe(prompt)
