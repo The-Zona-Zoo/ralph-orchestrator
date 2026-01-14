@@ -94,10 +94,17 @@ You're planning, not building.
 - ❌ Write implementation code
 - ❌ Run tests or make commits
 - ❌ Pick tasks to implement yourself
+- ❌ Output {promise} until you've created tasks AND they've all been completed
 
 ## DONE
 
-When ALL tasks are `[x]` or `[~]` and specs are satisfied, output: {promise}
+**Prerequisites** (ALL must be true before outputting {promise}):
+1. Scratchpad exists with at least one task
+2. You dispatched work to the builder at least once
+3. ALL tasks are marked `[x]` (done) or `[~]` (cancelled)
+4. Specs are satisfied
+
+Only when ALL prerequisites are met, output: {promise}
 
 ---
 {prompt}"#,
@@ -267,6 +274,11 @@ mod tests {
         assert!(instructions.contains("❌ Write implementation code"));
         assert!(instructions.contains("❌ Run tests or make commits"));
         assert!(instructions.contains("❌ Pick tasks to implement yourself"));
+
+        // Guards against premature completion (vacuous truth prevention)
+        assert!(instructions.contains("Prerequisites"));
+        assert!(instructions.contains("Scratchpad exists with at least one task"));
+        assert!(instructions.contains("dispatched work to the builder at least once"));
     }
 
     #[test]
