@@ -1,1 +1,1 @@
-Fix the issues in ISSUES.md
+implement the TUI spec
