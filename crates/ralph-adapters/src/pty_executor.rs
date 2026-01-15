@@ -1265,7 +1265,9 @@ fn dispatch_stream_event<H: StreamHandler>(
                         extracted_text.push_str(&text);
                         extracted_text.push('\n');
                     }
-                    ContentBlock::ToolUse { name, id, .. } => handler.on_tool_call(&name, &id),
+                    ContentBlock::ToolUse { name, id, input } => {
+                        handler.on_tool_call(&name, &id, &input)
+                    }
                 }
             }
         }
