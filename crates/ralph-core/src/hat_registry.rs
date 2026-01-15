@@ -2,13 +2,17 @@
 
 use crate::config::{HatConfig, RalphConfig};
 use ralph_proto::{Hat, HatId, Topic};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Registry for managing and creating hats from configuration.
 #[derive(Debug, Default)]
 pub struct HatRegistry {
     hats: HashMap<HatId, Hat>,
     configs: HashMap<HatId, HatConfig>,
+    /// Prefix index for O(1) early-exit on no-match lookups.
+    /// Contains all first segments of subscription patterns (e.g., "task" from "task.*").
+    /// Also contains "*" if any global wildcard exists.
+    prefix_index: HashSet<String>,
 }
 
 impl HatRegistry {
@@ -42,14 +46,32 @@ impl HatRegistry {
 
     /// Registers a hat with the registry.
     pub fn register(&mut self, hat: Hat) {
+        self.index_hat_subscriptions(&hat);
         self.hats.insert(hat.id.clone(), hat);
     }
 
     /// Registers a hat with its configuration.
     pub fn register_with_config(&mut self, hat: Hat, config: HatConfig) {
         let id = hat.id.clone();
+        self.index_hat_subscriptions(&hat);
         self.hats.insert(id.clone(), hat);
         self.configs.insert(id, config);
+    }
+
+    /// Indexes a hat's subscriptions for O(1) prefix lookup.
+    fn index_hat_subscriptions(&mut self, hat: &Hat) {
+        for sub in &hat.subscriptions {
+            let pattern = sub.as_str();
+            // Global wildcard matches everything - mark it specially
+            if pattern == "*" {
+                self.prefix_index.insert("*".to_string());
+            } else {
+                // Extract first segment (e.g., "task" from "task.*" or "task.start")
+                if let Some(prefix) = pattern.split('.').next() {
+                    self.prefix_index.insert(prefix.to_string());
+                }
+            }
+        }
     }
 
     /// Gets a hat by ID.
@@ -107,15 +129,30 @@ impl HatRegistry {
     }
 
     /// Returns the first hat subscribed to the given topic.
+    ///
+    /// Uses prefix index for O(1) early-exit when the topic prefix doesn't match
+    /// any subscription pattern.
     pub fn get_for_topic(&self, topic: &str) -> Option<&Hat> {
-        let topic = Topic::new(topic);
-        self.hats.values().find(|hat| hat.is_subscribed(&topic))
+        // Fast path: Check if any subscription could possibly match this topic
+        // If we have a global wildcard "*", we must do the full scan
+        if !self.prefix_index.contains("*") {
+            // Extract prefix from topic (e.g., "task" from "task.start")
+            let topic_prefix = topic.split('.').next().unwrap_or(topic);
+            if !self.prefix_index.contains(topic_prefix) {
+                // No subscription has this prefix - early exit
+                return None;
+            }
+        }
+
+        // Fall back to full linear scan
+        self.hats.values().find(|hat| hat.is_subscribed_str(topic))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Instant;
 
     #[test]
     fn test_empty_config_creates_empty_registry() {
@@ -216,5 +253,52 @@ hats:
         let impl_subs = registry.subscribers(&Topic::new("impl.done"));
         assert_eq!(impl_subs.len(), 1);
         assert_eq!(impl_subs[0].id.as_str(), "reviewer");
+    }
+
+    /// Benchmark test for get_for_topic() performance.
+    /// Run with: cargo test -p ralph-core bench_get_for_topic -- --nocapture
+    #[test]
+    fn bench_get_for_topic_baseline() {
+        // Create registry with 20 hats (realistic production scenario)
+        let mut yaml = String::from("hats:\n");
+        for i in 0..20 {
+            yaml.push_str(&format!(
+                "  hat{}:\n    name: \"Hat {}\"\n    triggers: [\"topic{}.*\", \"other{}.event\"]\n",
+                i, i, i, i
+            ));
+        }
+        let config: RalphConfig = serde_yaml::from_str(&yaml).unwrap();
+        let registry = HatRegistry::from_config(&config);
+
+        // Topics to test - mix of matches and non-matches
+        let topics = [
+            "topic0.start",    // First hat match
+            "topic10.event",   // Middle hat match
+            "topic19.done",    // Last hat match
+            "nomatch.topic",   // No match
+        ];
+
+        const ITERATIONS: u32 = 100_000;
+
+        let start = Instant::now();
+        for _ in 0..ITERATIONS {
+            for topic in &topics {
+                let _ = registry.get_for_topic(topic);
+            }
+        }
+        let elapsed = start.elapsed();
+
+        let ops = (ITERATIONS as u64) * (topics.len() as u64);
+        let ns_per_op = elapsed.as_nanos() / ops as u128;
+
+        println!("\n=== get_for_topic() Baseline ===");
+        println!("Registry size: {} hats", registry.len());
+        println!("Operations: {}", ops);
+        println!("Total time: {:?}", elapsed);
+        println!("Time per operation: {} ns", ns_per_op);
+        println!("================================\n");
+
+        // Assert reasonable performance (sanity check)
+        assert!(ns_per_op < 10_000, "Performance degraded: {} ns/op", ns_per_op);
     }
 }

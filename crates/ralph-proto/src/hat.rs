@@ -141,7 +141,14 @@ impl Hat {
 
     /// Checks if this hat is subscribed to the given topic.
     pub fn is_subscribed(&self, topic: &Topic) -> bool {
-        self.subscriptions.iter().any(|sub| sub.matches(topic))
+        self.is_subscribed_str(topic.as_str())
+    }
+
+    /// Checks if this hat is subscribed to the given topic string.
+    ///
+    /// Zero-allocation variant of `is_subscribed()` for hot paths.
+    pub fn is_subscribed_str(&self, topic: &str) -> bool {
+        self.subscriptions.iter().any(|sub| sub.matches_str(topic))
     }
 
     /// Checks if this hat has a specific (non-global-wildcard) subscription for the topic.

@@ -37,31 +37,46 @@ impl Topic {
     /// - Exact match for non-pattern topics
     /// - A single `*` matches everything
     pub fn matches(&self, topic: &Topic) -> bool {
+        self.matches_str(topic.as_str())
+    }
+
+    /// Checks if this topic pattern matches a given topic string.
+    ///
+    /// Zero-allocation variant of `matches()` for hot paths.
+    /// Avoids creating a temporary `Topic` wrapper.
+    pub fn matches_str(&self, target: &str) -> bool {
         let pattern = &self.0;
-        let target = &topic.0;
 
         // Single wildcard matches everything
         if pattern == "*" {
             return true;
         }
 
-        // Exact match
+        // Exact match (most common case for non-wildcard patterns)
         if pattern == target {
             return true;
         }
 
-        // Glob pattern matching
-        let pattern_parts: Vec<&str> = pattern.split('.').collect();
-        let target_parts: Vec<&str> = target.split('.').collect();
-
-        if pattern_parts.len() != target_parts.len() {
+        // Quick length check: if no wildcards and lengths differ, can't match
+        if !pattern.contains('*') {
             return false;
         }
 
-        pattern_parts
-            .iter()
-            .zip(target_parts.iter())
-            .all(|(p, t)| *p == "*" || p == t)
+        // Glob pattern matching using iterators (no Vec allocation)
+        let mut pattern_parts = pattern.split('.');
+        let mut target_parts = target.split('.');
+
+        loop {
+            match (pattern_parts.next(), target_parts.next()) {
+                (Some(p), Some(t)) => {
+                    if p != "*" && p != t {
+                        return false;
+                    }
+                }
+                (None, None) => return true,
+                _ => return false, // Length mismatch
+            }
+        }
     }
 }
 

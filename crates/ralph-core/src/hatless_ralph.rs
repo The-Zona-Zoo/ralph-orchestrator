@@ -26,6 +26,7 @@ pub struct HatInfo {
     pub name: String,
     pub subscribes_to: Vec<String>,
     pub publishes: Vec<String>,
+    pub instructions: String,
 }
 
 impl HatTopology {
@@ -37,6 +38,7 @@ impl HatTopology {
                 name: hat.name.clone(),
                 subscribes_to: hat.subscriptions.iter().map(|t| t.as_str().to_string()).collect(),
                 publishes: hat.publishes.iter().map(|t| t.as_str().to_string()).collect(),
+                instructions: hat.instructions.clone(),
             })
             .collect();
 
@@ -73,8 +75,16 @@ impl HatlessRalph {
     }
 
     /// Builds Ralph's prompt based on context.
-    pub fn build_prompt(&self, _context: &str) -> String {
+    pub fn build_prompt(&self, context: &str) -> String {
         let mut prompt = self.core_prompt();
+
+        // Include pending events BEFORE workflow so Ralph sees the task first
+        if !context.trim().is_empty() {
+            prompt.push_str("## PENDING EVENTS\n\n");
+            prompt.push_str(context);
+            prompt.push_str("\n\n");
+        }
+
         prompt.push_str(&self.workflow_section());
 
         if let Some(topology) = &self.hat_topology {
@@ -167,8 +177,12 @@ Do not plan or analyze — delegate now.
 Update `{scratchpad}` with prioritized tasks.
 
 ### 2. DELEGATE
-Publish the starting event to hand off to specialized hats.
-**DO NOT implement yourself** — that's what the hats are for.
+Publish ONE event to hand off to specialized hats.
+
+**CRITICAL: STOP after publishing the event.** A new iteration will start
+with fresh context to handle the work. Do NOT continue working in this
+iteration — let the next iteration handle the event with the appropriate
+hat persona.
 
 ",
                 scratchpad = self.core.scratchpad
@@ -221,6 +235,19 @@ Until all tasks `[x]` or `[~]`.
         }
 
         section.push('\n');
+
+        // Add instructions sections for hats with non-empty instructions
+        for hat in &topology.hats {
+            if !hat.instructions.trim().is_empty() {
+                section.push_str(&format!("### {} Instructions\n\n", hat.name));
+                section.push_str(&hat.instructions);
+                if !hat.instructions.ends_with('\n') {
+                    section.push('\n');
+                }
+                section.push('\n');
+            }
+        }
+
         section
     }
 
@@ -332,8 +359,8 @@ hats:
             "Multi-hat mode should NOT tell Ralph to implement"
         );
         assert!(
-            prompt.contains("DO NOT implement yourself"),
-            "Should explicitly tell Ralph not to implement"
+            prompt.contains("CRITICAL: STOP after publishing"),
+            "Should explicitly tell Ralph to stop after publishing event"
         );
 
         // Hats section when hats are defined
@@ -454,6 +481,121 @@ hats:
     }
 
     #[test]
+    fn test_hat_instructions_propagated_to_prompt() {
+        // When a hat has instructions defined in config,
+        // those instructions should appear in the generated prompt
+        let yaml = r#"
+hats:
+  tdd_writer:
+    name: "TDD Writer"
+    triggers: ["tdd.start"]
+    publishes: ["test.written"]
+    instructions: |
+      You are a Test-Driven Development specialist.
+      Always write failing tests before implementation.
+      Focus on edge cases and error handling.
+"#;
+        let config: RalphConfig = serde_yaml::from_str(yaml).unwrap();
+        let registry = HatRegistry::from_config(&config);
+        let ralph = HatlessRalph::new(
+            "LOOP_COMPLETE",
+            config.core.clone(),
+            &registry,
+            Some("tdd.start".to_string()),
+        );
+
+        let prompt = ralph.build_prompt("");
+
+        // Instructions should appear in the prompt
+        assert!(
+            prompt.contains("### TDD Writer Instructions"),
+            "Prompt should include hat instructions section header"
+        );
+        assert!(
+            prompt.contains("Test-Driven Development specialist"),
+            "Prompt should include actual instructions content"
+        );
+        assert!(
+            prompt.contains("Always write failing tests"),
+            "Prompt should include full instructions"
+        );
+    }
+
+    #[test]
+    fn test_empty_instructions_not_rendered() {
+        // When a hat has empty/no instructions, no instructions section should appear
+        let yaml = r#"
+hats:
+  builder:
+    name: "Builder"
+    triggers: ["build.task"]
+    publishes: ["build.done"]
+"#;
+        let config: RalphConfig = serde_yaml::from_str(yaml).unwrap();
+        let registry = HatRegistry::from_config(&config);
+        let ralph = HatlessRalph::new(
+            "LOOP_COMPLETE",
+            config.core.clone(),
+            &registry,
+            None,
+        );
+
+        let prompt = ralph.build_prompt("");
+
+        // No instructions section should appear for hats without instructions
+        assert!(
+            !prompt.contains("### Builder Instructions"),
+            "Prompt should NOT include instructions section for hat with empty instructions"
+        );
+    }
+
+    #[test]
+    fn test_multiple_hats_with_instructions() {
+        // When multiple hats have instructions, each should have its own section
+        let yaml = r#"
+hats:
+  planner:
+    name: "Planner"
+    triggers: ["planning.start"]
+    publishes: ["build.task"]
+    instructions: "Plan carefully before implementation."
+  builder:
+    name: "Builder"
+    triggers: ["build.task"]
+    publishes: ["build.done"]
+    instructions: "Focus on clean, testable code."
+"#;
+        let config: RalphConfig = serde_yaml::from_str(yaml).unwrap();
+        let registry = HatRegistry::from_config(&config);
+        let ralph = HatlessRalph::new(
+            "LOOP_COMPLETE",
+            config.core.clone(),
+            &registry,
+            None,
+        );
+
+        let prompt = ralph.build_prompt("");
+
+        // Both hats' instructions should appear
+        assert!(
+            prompt.contains("### Planner Instructions"),
+            "Prompt should include Planner instructions section"
+        );
+        assert!(
+            prompt.contains("Plan carefully before implementation"),
+            "Prompt should include Planner instructions content"
+        );
+        assert!(
+            prompt.contains("### Builder Instructions"),
+            "Prompt should include Builder instructions section"
+        );
+        assert!(
+            prompt.contains("Focus on clean, testable code"),
+            "Prompt should include Builder instructions content"
+        );
+    }
+
+    #[test]
     fn test_fast_path_with_starting_event() {
         // When starting_event is configured AND scratchpad doesn't exist,
         // should use fast path (skip PLAN step)
@@ -489,6 +631,91 @@ hats:
         assert!(
             !prompt.contains("### 1. PLAN"),
             "Fast path should skip PLAN step"
+        );
+    }
+
+    #[test]
+    fn test_events_context_included_in_prompt() {
+        // Given a non-empty events context
+        // When build_prompt(context) is called
+        // Then the prompt contains ## PENDING EVENTS section with the context
+        let config = RalphConfig::default();
+        let registry = HatRegistry::new();
+        let ralph = HatlessRalph::new("LOOP_COMPLETE", config.core.clone(), &registry, None);
+
+        let events_context = r#"[task.start] User's task: Review this code for security vulnerabilities
+[build.done] Build completed successfully"#;
+
+        let prompt = ralph.build_prompt(events_context);
+
+        assert!(
+            prompt.contains("## PENDING EVENTS"),
+            "Prompt should contain PENDING EVENTS section"
+        );
+        assert!(
+            prompt.contains("Review this code for security vulnerabilities"),
+            "Prompt should contain the user's task"
+        );
+        assert!(
+            prompt.contains("Build completed successfully"),
+            "Prompt should contain all events from context"
+        );
+    }
+
+    #[test]
+    fn test_empty_context_no_pending_events_section() {
+        // Given an empty events context
+        // When build_prompt("") is called
+        // Then no PENDING EVENTS section appears
+        let config = RalphConfig::default();
+        let registry = HatRegistry::new();
+        let ralph = HatlessRalph::new("LOOP_COMPLETE", config.core.clone(), &registry, None);
+
+        let prompt = ralph.build_prompt("");
+
+        assert!(
+            !prompt.contains("## PENDING EVENTS"),
+            "Empty context should not produce PENDING EVENTS section"
+        );
+    }
+
+    #[test]
+    fn test_whitespace_only_context_no_pending_events_section() {
+        // Given a whitespace-only events context
+        // When build_prompt is called
+        // Then no PENDING EVENTS section appears
+        let config = RalphConfig::default();
+        let registry = HatRegistry::new();
+        let ralph = HatlessRalph::new("LOOP_COMPLETE", config.core.clone(), &registry, None);
+
+        let prompt = ralph.build_prompt("   \n\t  ");
+
+        assert!(
+            !prompt.contains("## PENDING EVENTS"),
+            "Whitespace-only context should not produce PENDING EVENTS section"
+        );
+    }
+
+    #[test]
+    fn test_events_section_before_workflow() {
+        // Given events context with a task
+        // When prompt is built
+        // Then ## PENDING EVENTS appears BEFORE ## WORKFLOW
+        let config = RalphConfig::default();
+        let registry = HatRegistry::new();
+        let ralph = HatlessRalph::new("LOOP_COMPLETE", config.core.clone(), &registry, None);
+
+        let events_context = "[task.start] Implement feature X";
+        let prompt = ralph.build_prompt(events_context);
+
+        let events_pos = prompt.find("## PENDING EVENTS").expect("Should have PENDING EVENTS");
+        let workflow_pos = prompt.find("## WORKFLOW").expect("Should have WORKFLOW");
+
+        assert!(
+            events_pos < workflow_pos,
+            "PENDING EVENTS ({}) should come before WORKFLOW ({})",
+            events_pos,
+            workflow_pos
         );
     }
 }
