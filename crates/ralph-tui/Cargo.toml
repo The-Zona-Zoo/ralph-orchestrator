@@ -19,3 +19,4 @@ crossterm.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 tui-term = "0.3"
+scopeguard.workspace = true

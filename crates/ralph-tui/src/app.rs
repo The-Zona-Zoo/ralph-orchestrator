@@ -6,10 +6,15 @@ use crate::state::TuiState;
 use crate::widgets::{footer, header, help, terminal::TerminalWidget};
 use anyhow::Result;
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
+    cursor::Show,
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
+        KeyModifiers, MouseEventKind,
+    },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
+use scopeguard::defer;
 use ralph_adapters::pty_handle::PtyHandle;
 use ratatui::{
     Terminal,
@@ -17,8 +22,9 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
 };
 use std::io;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio::time::{Duration, interval};
 
 /// Main TUI application.
@@ -29,6 +35,13 @@ pub struct App {
     scroll_manager: ScrollManager,
     input_tx: mpsc::UnboundedSender<Vec<u8>>,
     control_tx: mpsc::UnboundedSender<ralph_adapters::pty_handle::ControlCommand>,
+    /// Atomic iteration counter for synchronizing the PTY output task.
+    /// Incremented when iteration boundaries are detected, allowing the
+    /// background task to skip orphaned bytes from previous iterations.
+    iteration_counter: Arc<AtomicU32>,
+    /// Receives notification when PTY process terminates.
+    /// Used to break the event loop and exit cleanly on double Ctrl+C.
+    terminated_rx: watch::Receiver<bool>,
 }
 
 impl App {
@@ -51,17 +64,29 @@ impl App {
         prefix_modifiers: crossterm::event::KeyModifiers,
     ) -> Self {
         let terminal_widget = Arc::new(Mutex::new(TerminalWidget::new()));
+        let iteration_counter = Arc::new(AtomicU32::new(0));
 
         let PtyHandle {
             mut output_rx,
             input_tx,
             control_tx,
+            terminated_rx,
         } = pty_handle;
 
-        // Spawn task to read PTY output and feed to terminal widget
+        // Spawn task to read PTY output and feed to terminal widget.
+        // Uses iteration_counter to detect iteration boundaries and skip
+        // orphaned bytes from previous iterations, preventing rendering corruption.
         let widget_clone = Arc::clone(&terminal_widget);
+        let iteration_for_task = Arc::clone(&iteration_counter);
         tokio::spawn(async move {
+            let mut last_seen_iteration = 0;
             while let Some(bytes) = output_rx.recv().await {
+                let current = iteration_for_task.load(Ordering::Acquire);
+                if current != last_seen_iteration {
+                    // Iteration boundary detected - skip orphaned bytes from old iteration
+                    last_seen_iteration = current;
+                    continue;
+                }
                 if let Ok(mut widget) = widget_clone.lock() {
                     widget.process(&bytes);
                 }
@@ -75,6 +100,8 @@ impl App {
             scroll_manager: ScrollManager::new(),
             input_tx,
             control_tx,
+            iteration_counter,
+            terminated_rx,
         }
     }
 
@@ -83,9 +110,18 @@ impl App {
     pub async fn run(mut self) -> Result<()> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen)?;
+        execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
+
+        // CRITICAL: Ensure terminal cleanup on ANY exit path (normal, abort, or panic).
+        // When cleanup_tui() calls handle.abort(), the task is cancelled immediately
+        // at its current await point, skipping all code after the loop. This defer!
+        // guard runs on Drop, which is guaranteed even during task cancellation.
+        defer! {
+            let _ = disable_raw_mode();
+            let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture, Show);
+        }
 
         let mut tick = interval(Duration::from_millis(100));
 
@@ -101,6 +137,11 @@ impl App {
                         if state.iteration_changed() {
                             state.prev_iteration = state.iteration;
                             drop(state);
+
+                            // Signal iteration boundary to output task BEFORE clearing.
+                            // This ensures orphaned bytes from the old iteration are skipped.
+                            self.iteration_counter.fetch_add(1, Ordering::Release);
+
                             let mut widget = self.terminal_widget.lock().unwrap();
                             widget.clear();
                             self.scroll_manager.reset();
@@ -145,10 +186,42 @@ impl App {
                         }
                     })?;
 
-                    // Poll for keyboard events
+                    // Poll for input events (keyboard and mouse)
                     if event::poll(Duration::from_millis(0))? {
-                        if let Event::Key(key) = event::read()? {
-                            if key.kind == KeyEventKind::Press {
+                        match event::read()? {
+                            Event::Mouse(mouse) => {
+                                // Handle mouse scroll - works in any mode for better UX
+                                match mouse.kind {
+                                    MouseEventKind::ScrollUp => {
+                                        // Enter scroll mode if not already
+                                        if !self.state.lock().unwrap().in_scroll_mode {
+                                            self.input_router.enter_scroll_mode();
+                                            self.state.lock().unwrap().in_scroll_mode = true;
+                                            let widget = self.terminal_widget.lock().unwrap();
+                                            let total_lines = widget.total_lines();
+                                            drop(widget);
+                                            self.scroll_manager.update_dimensions(
+                                                total_lines,
+                                                terminal.size()?.height as usize - 6,
+                                            );
+                                        }
+                                        self.scroll_manager.scroll_up(3);
+                                    }
+                                    MouseEventKind::ScrollDown => {
+                                        if self.state.lock().unwrap().in_scroll_mode {
+                                            self.scroll_manager.scroll_down(3);
+                                            // Exit scroll mode if we've scrolled to bottom
+                                            if self.scroll_manager.offset() == 0 {
+                                                self.input_router.exit_scroll_mode();
+                                                self.scroll_manager.reset();
+                                                self.state.lock().unwrap().in_scroll_mode = false;
+                                            }
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            Event::Key(key) if key.kind == KeyEventKind::Press => {
                                 // Dismiss help on any key
                                 if self.state.lock().unwrap().show_help {
                                     self.state.lock().unwrap().show_help = false;
@@ -249,18 +322,25 @@ impl App {
                                     }
                                 }
                             }
+                            // Ignore other events (FocusGained, FocusLost, Paste, Resize, key releases)
+                            _ => {}
                         }
                     }
                 }
                 _ = tokio::signal::ctrl_c() => {
                     break;
                 }
+                _ = self.terminated_rx.changed() => {
+                    // PTY process terminated (e.g., double Ctrl+C)
+                    if *self.terminated_rx.borrow() {
+                        break;
+                    }
+                }
             }
         }
 
-        disable_raw_mode()?;
-        execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-
+        // NOTE: Explicit cleanup removed - now handled by defer! guard above.
+        // The guard ensures cleanup happens even on task abort or panic.
         Ok(())
     }
 }

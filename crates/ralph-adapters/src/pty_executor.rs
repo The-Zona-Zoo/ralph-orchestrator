@@ -28,7 +28,7 @@ use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tracing::{debug, info, warn};
 
 /// Result of a PTY execution.
@@ -170,6 +170,9 @@ pub struct PtyExecutor {
     input_rx: mpsc::UnboundedReceiver<Vec<u8>>,
     control_tx: Option<mpsc::UnboundedSender<crate::pty_handle::ControlCommand>>,
     control_rx: mpsc::UnboundedReceiver<crate::pty_handle::ControlCommand>,
+    // Termination notification for TUI
+    terminated_tx: watch::Sender<bool>,
+    terminated_rx: Option<watch::Receiver<bool>>,
 }
 
 impl PtyExecutor {
@@ -178,7 +181,8 @@ impl PtyExecutor {
         let (output_tx, output_rx) = mpsc::unbounded_channel();
         let (input_tx, input_rx) = mpsc::unbounded_channel();
         let (control_tx, control_rx) = mpsc::unbounded_channel();
-        
+        let (terminated_tx, terminated_rx) = watch::channel(false);
+
         Self {
             backend,
             config,
@@ -188,6 +192,8 @@ impl PtyExecutor {
             input_rx,
             control_tx: Some(control_tx),
             control_rx,
+            terminated_tx,
+            terminated_rx: Some(terminated_rx),
         }
     }
 
@@ -199,6 +205,7 @@ impl PtyExecutor {
             output_rx: self.output_rx.take().expect("handle() already called"),
             input_tx: self.input_tx.take().expect("handle() already called"),
             control_tx: self.control_tx.take().expect("handle() already called"),
+            terminated_rx: self.terminated_rx.take().expect("handle() already called"),
         }
     }
 
@@ -368,7 +375,7 @@ impl PtyExecutor {
                         info!("Interrupt received in observe mode, terminating");
                         termination = TerminationType::UserInterrupt;
                         should_terminate.store(true, Ordering::SeqCst);
-                        let _ = self.terminate_child(&mut child, true);
+                        let _ = self.terminate_child(&mut child, true).await;
                         break;
                     }
                 }
@@ -411,7 +418,7 @@ impl PtyExecutor {
                     );
                     termination = TerminationType::IdleTimeout;
                     should_terminate.store(true, Ordering::SeqCst);
-                    self.terminate_child(&mut child, true)?;
+                    self.terminate_child(&mut child, true).await?;
                     break;
                 }
             }
@@ -589,7 +596,7 @@ impl PtyExecutor {
                         info!("Interrupt received in streaming observe mode, terminating");
                         termination = TerminationType::UserInterrupt;
                         should_terminate.store(true, Ordering::SeqCst);
-                        let _ = self.terminate_child(&mut child, true);
+                        let _ = self.terminate_child(&mut child, true).await;
                         break;
                     }
                 }
@@ -646,7 +653,7 @@ impl PtyExecutor {
                     );
                     termination = TerminationType::IdleTimeout;
                     should_terminate.store(true, Ordering::SeqCst);
-                    self.terminate_child(&mut child, true)?;
+                    self.terminate_child(&mut child, true).await?;
                     break;
                 }
             }
@@ -887,6 +894,8 @@ impl PtyExecutor {
                 }
 
                 should_terminate.store(true, Ordering::SeqCst);
+                // Signal TUI that PTY has terminated
+                let _ = self.terminated_tx.send(true);
 
                 let final_termination = resolve_termination_type(exit_code, termination);
                 // run_interactive doesn't parse JSON, so extracted_text is empty
@@ -952,7 +961,7 @@ impl PtyExecutor {
                                     info!("Double Ctrl+C detected, terminating");
                                     termination = TerminationType::UserInterrupt;
                                     should_terminate.store(true, Ordering::SeqCst);
-                                    self.terminate_child(&mut child, true)?;
+                                    self.terminate_child(&mut child, true).await?;
                                     break;
                                 }
                             }
@@ -961,7 +970,7 @@ impl PtyExecutor {
                             info!("Ctrl+\\ detected, force killing");
                             termination = TerminationType::ForceKill;
                             should_terminate.store(true, Ordering::SeqCst);
-                            self.terminate_child(&mut child, false)?;
+                            self.terminate_child(&mut child, false).await?;
                             break;
                         }
                         Some(InputEvent::Data(data)) => {
@@ -992,7 +1001,7 @@ impl PtyExecutor {
                                         info!("Double Ctrl+C detected, terminating");
                                         termination = TerminationType::UserInterrupt;
                                         should_terminate.store(true, Ordering::SeqCst);
-                                        self.terminate_child(&mut child, true)?;
+                                        self.terminate_child(&mut child, true).await?;
                                         break;
                                     }
                                 }
@@ -1001,7 +1010,7 @@ impl PtyExecutor {
                                 info!("Ctrl+\\ detected, force killing");
                                 termination = TerminationType::ForceKill;
                                 should_terminate.store(true, Ordering::SeqCst);
-                                self.terminate_child(&mut child, false)?;
+                                self.terminate_child(&mut child, false).await?;
                                 break;
                             }
                             InputEvent::Data(bytes) => {
@@ -1022,7 +1031,7 @@ impl PtyExecutor {
                                 info!("Control command: Kill");
                                 termination = TerminationType::UserInterrupt;
                                 should_terminate.store(true, Ordering::SeqCst);
-                                self.terminate_child(&mut child, true)?;
+                                self.terminate_child(&mut child, true).await?;
                                 break;
                             }
                             ControlCommand::Resize(cols, rows) => {
@@ -1053,7 +1062,7 @@ impl PtyExecutor {
                     );
                     termination = TerminationType::IdleTimeout;
                     should_terminate.store(true, Ordering::SeqCst);
-                    self.terminate_child(&mut child, true)?;
+                    self.terminate_child(&mut child, true).await?;
                     break;
                 }
 
@@ -1063,7 +1072,7 @@ impl PtyExecutor {
                         info!("Interrupt received in interactive mode, terminating");
                         termination = TerminationType::UserInterrupt;
                         should_terminate.store(true, Ordering::SeqCst);
-                        self.terminate_child(&mut child, true)?;
+                        self.terminate_child(&mut child, true).await?;
                         break;
                     }
                 }
@@ -1072,6 +1081,9 @@ impl PtyExecutor {
 
         // Ensure termination flag is set for spawned threads
         should_terminate.store(true, Ordering::SeqCst);
+
+        // Signal TUI that PTY has terminated
+        let _ = self.terminated_tx.send(true);
 
         // Wait for child to fully exit (interruptible + bounded)
         let status = self
@@ -1097,8 +1109,12 @@ impl PtyExecutor {
     ///
     /// If `graceful` is true, sends SIGTERM and waits up to 5 seconds before SIGKILL.
     /// If `graceful` is false, sends SIGKILL immediately.
+    ///
+    /// This is an async function to avoid blocking the tokio runtime during the
+    /// grace period wait. Previously used `std::thread::sleep` which blocked the
+    /// worker thread for up to 5 seconds, making the TUI appear frozen.
     #[allow(clippy::unused_self)] // Self is conceptually the right receiver for this method
-    fn terminate_child(&self, child: &mut Box<dyn portable_pty::Child + Send>, graceful: bool) -> io::Result<()> {
+    async fn terminate_child(&self, child: &mut Box<dyn portable_pty::Child + Send>, graceful: bool) -> io::Result<()> {
         let pid = match child.process_id() {
             Some(id) => Pid::from_raw(id as i32),
             None => return Ok(()), // Already exited
@@ -1108,8 +1124,8 @@ impl PtyExecutor {
             debug!(pid = %pid, "Sending SIGTERM");
             let _ = kill(pid, Signal::SIGTERM);
 
-            // Wait up to 5 seconds for graceful exit
-            let grace_period = Duration::from_secs(5);
+            // Wait up to 5 seconds for graceful exit (reduced from 5s for better UX)
+            let grace_period = Duration::from_secs(2);
             let start = Instant::now();
 
             while start.elapsed() < grace_period {
@@ -1119,7 +1135,8 @@ impl PtyExecutor {
                 {
                     return Ok(());
                 }
-                std::thread::sleep(Duration::from_millis(100));
+                // Use async sleep to avoid blocking the tokio runtime
+                tokio::time::sleep(Duration::from_millis(50)).await;
             }
 
             // Still running after grace period - force kill
