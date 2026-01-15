@@ -1,0 +1,58 @@
+# Ralph Orchestrator Configuration - Code Assist
+# v2 nested format - TDD-based implementation following code-assist SOP
+# See: .sops/code-assist.sop.md for full workflow documentation
+
+# Event loop settings
+event_loop:
+  completion_promise: "LOOP_COMPLETE"
+  max_iterations: 100
+  max_runtime_seconds: 14400      # 4 hours
+  idle_timeout_secs: 1800
+
+# CLI backend settings
+cli:
+  backend: "claude"
+  prompt_mode: "arg"              # Pass prompt as CLI argument
+
+# Core behaviors (always injected into prompts)
+core:
+  scratchpad: ".agent/scratchpad.md"
+  specs_dir: "./specs/"
+  guardrails:
+    - "Fresh context each iteration - scratchpad is memory"
+    - "Don't assume 'not implemented' - search first"
+    - "Backpressure is law - tests/typecheck/lint must pass"
+    - "TDD is mandatory - RED → GREEN → REFACTOR"
+
+hats:
+  builder:
+    name: "Code Assist Builder"
+    triggers: ["build.task", "task.start"]
+    publishes: ["build.done", "build.blocked"]
+    instructions: |
+      # Code Assist Builder Hat
+
+      Read and follow the SOP at: .sops/code-assist.sop.md
+
+      This SOP defines a TDD-based workflow: Explore → Plan → Code → Commit
+
+      ## Event Publishing (CRITICAL)
+      You MUST publish events using XML tags. Ralph parses these from your output.
+
+      When task is complete with passing tests:
+      ```
+      <event topic="build.done">
+      tests: pass
+      Summary of what was implemented
+      </event>
+      ```
+
+      When blocked and unable to proceed:
+      ```
+      <event topic="build.blocked">
+      Explanation of what's blocking progress
+      </event>
+      ```
+
+# Feature flags
+verbose: false

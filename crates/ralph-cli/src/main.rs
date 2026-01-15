@@ -10,7 +10,7 @@
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
-use ralph_adapters::{detect_backend, CliBackend, CliExecutor, PtyConfig, PtyExecutor};
+use ralph_adapters::{detect_backend, CliBackend, CliExecutor, ConsoleStreamHandler, PtyConfig, PtyExecutor, QuietStreamHandler};
 use ralph_core::{EventHistory, EventLogger, EventLoop, EventParser, EventRecord, RalphConfig, SummaryWriter, TerminationReason};
 use ralph_proto::{Event, HatId};
 use ralph_tui::Tui;
@@ -51,6 +51,30 @@ mod process_management {
     pub fn setup_process_group() {}
 }
 
+/// Installs a panic hook that restores terminal state before printing panic info.
+///
+/// When a TUI application panics, the terminal can be left in a broken state:
+/// - Raw mode enabled (input not line-buffered)
+/// - Alternate screen buffer active (no scrollback)
+/// - Cursor hidden
+///
+/// This hook ensures the terminal is restored so the panic message is visible
+/// and the user can scroll/interact normally.
+fn install_panic_hook() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        // Restore terminal state before printing panic info
+        let _ = crossterm::terminal::disable_raw_mode();
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            crossterm::terminal::LeaveAlternateScreen,
+            crossterm::cursor::Show
+        );
+        // Call the default panic hook to print the panic message
+        default_hook(panic_info);
+    }));
+}
+
 /// Color output mode for terminal display.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
 pub enum ColorMode {
@@ -71,6 +95,47 @@ impl ColorMode {
             ColorMode::Never => false,
             ColorMode::Auto => stdout().is_terminal(),
         }
+    }
+}
+
+/// Verbosity level for streaming output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Verbosity {
+    /// Suppress all streaming output (for CI/scripting)
+    Quiet,
+    /// Show assistant text and tool invocations (default)
+    #[default]
+    Normal,
+    /// Show everything including tool results and session summary
+    Verbose,
+}
+
+impl Verbosity {
+    /// Resolves verbosity from CLI args, env vars, and config.
+    ///
+    /// Precedence (highest to lowest):
+    /// 1. CLI flags: `--verbose`/`-v` or `--quiet`/`-q`
+    /// 2. Environment variables: `RALPH_VERBOSE=1` or `RALPH_QUIET=1`
+    /// 3. Config file: (if supported in future)
+    /// 4. Default: Normal
+    fn resolve(cli_verbose: bool, cli_quiet: bool) -> Self {
+        // CLI flags take precedence
+        if cli_quiet {
+            return Verbosity::Quiet;
+        }
+        if cli_verbose {
+            return Verbosity::Verbose;
+        }
+
+        // Environment variables
+        if std::env::var("RALPH_QUIET").is_ok() {
+            return Verbosity::Quiet;
+        }
+        if std::env::var("RALPH_VERBOSE").is_ok() {
+            return Verbosity::Verbose;
+        }
+
+        Verbosity::Normal
     }
 }
 
@@ -175,6 +240,18 @@ struct RunArgs {
     #[arg(long)]
     idle_timeout: Option<u32>,
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // Verbosity Options
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Enable verbose output (show tool results and session summary)
+    #[arg(short = 'v', long, conflicts_with = "quiet")]
+    verbose: bool,
+
+    /// Suppress streaming output (for CI/scripting)
+    #[arg(short = 'q', long, conflicts_with = "verbose")]
+    quiet: bool,
+
     /// [DEPRECATED] Use -i/--interactive instead
     #[arg(long, hide = true)]
     tui: bool,
@@ -201,6 +278,14 @@ struct ResumeArgs {
     /// Idle timeout in seconds for interactive mode
     #[arg(long)]
     idle_timeout: Option<u32>,
+
+    /// Enable verbose output (show tool results and session summary)
+    #[arg(short = 'v', long, conflicts_with = "quiet")]
+    verbose: bool,
+
+    /// Suppress streaming output (for CI/scripting)
+    #[arg(short = 'q', long, conflicts_with = "verbose")]
+    quiet: bool,
 
     /// [DEPRECATED] Use -i/--interactive instead
     #[arg(long, hide = true)]
@@ -237,6 +322,10 @@ struct EventsArgs {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Install panic hook to restore terminal state on crash
+    // This prevents the terminal from being left in raw mode or alternate screen
+    install_panic_hook();
+
     let cli = Cli::parse();
 
     // Initialize logging
@@ -260,6 +349,8 @@ async fn main() -> Result<()> {
                 interactive: false,
                 autonomous: false,
                 idle_timeout: None,
+                verbose: false,
+                quiet: false,
                 tui: false, // No TUI by default
             };
             run_command(cli.config, cli.verbose, cli.color, args).await
@@ -327,20 +418,6 @@ async fn run_command(
         eprintln!("{warning}");
     }
 
-    // Run preflight validation to catch issues before the loop starts
-    let (preflight_errors, preflight_warnings) = config.preflight_check();
-    for warning in &preflight_warnings {
-        warn!("Preflight: {}", warning);
-    }
-    if !preflight_errors.is_empty() {
-        eprintln!("\n❌ Preflight check failed:");
-        for error in &preflight_errors {
-            eprintln!("   • {error}");
-        }
-        eprintln!("\nFix these issues before running the loop.\n");
-        anyhow::bail!("Preflight validation failed with {} error(s)", preflight_errors.len());
-    }
-
     // Handle auto-detection if backend is "auto"
     if config.cli.backend == "auto" {
         let priority = config.get_agent_priority();
@@ -394,7 +471,8 @@ async fn run_command(
 
     // Run the orchestration loop and exit with proper exit code
     let enable_tui = args.interactive || args.tui; // Support both for backward compat
-    let reason = run_loop(config, color_mode, enable_tui).await?;
+    let verbosity = Verbosity::resolve(verbose || args.verbose, args.quiet);
+    let reason = run_loop(config, color_mode, enable_tui, verbosity).await?;
     let exit_code = reason.exit_code();
 
     // Use explicit exit for non-zero codes to ensure proper exit status
@@ -469,20 +547,6 @@ async fn resume_command(
         eprintln!("{warning}");
     }
 
-    // Run preflight validation to catch issues before the loop starts
-    let (preflight_errors, preflight_warnings) = config.preflight_check();
-    for warning in &preflight_warnings {
-        warn!("Preflight: {}", warning);
-    }
-    if !preflight_errors.is_empty() {
-        eprintln!("\n❌ Preflight check failed:");
-        for error in &preflight_errors {
-            eprintln!("   • {error}");
-        }
-        eprintln!("\nFix these issues before running the loop.\n");
-        anyhow::bail!("Preflight validation failed with {} error(s)", preflight_errors.len());
-    }
-
     // Handle auto-detection if backend is "auto"
     if config.cli.backend == "auto" {
         let priority = config.get_agent_priority();
@@ -506,7 +570,8 @@ async fn resume_command(
     // The key difference: we publish task.resume instead of task.start,
     // signaling the planner to read the existing scratchpad
     let enable_tui = args.interactive || args.tui; // Support both for backward compat
-    let reason = run_loop_impl(config, color_mode, true, enable_tui).await?;
+    let verbosity = Verbosity::resolve(verbose || args.verbose, args.quiet);
+    let reason = run_loop_impl(config, color_mode, true, enable_tui, verbosity).await?;
     let exit_code = reason.exit_code();
 
     if exit_code != 0 {
@@ -776,9 +841,15 @@ fn truncate(s: &str, max_len: usize) -> String {
 ///
 /// Note: CLI overrides are already applied to config before this function is called.
 fn resolve_prompt_content(event_loop_config: &ralph_core::EventLoopConfig) -> Result<String> {
+    debug!(
+        inline_prompt = ?event_loop_config.prompt.as_ref().map(|s| format!("{}...", &s[..s.len().min(50)])),
+        prompt_file = %event_loop_config.prompt_file,
+        "Resolving prompt content"
+    );
+
     // Check for inline prompt first (CLI -p or config prompt)
     if let Some(ref inline_text) = event_loop_config.prompt {
-        debug!("Using inline prompt text");
+        debug!(len = inline_text.len(), "Using inline prompt text");
         return Ok(inline_text.clone());
     }
 
@@ -786,10 +857,12 @@ fn resolve_prompt_content(event_loop_config: &ralph_core::EventLoopConfig) -> Re
     let prompt_file = &event_loop_config.prompt_file;
     if !prompt_file.is_empty() {
         let path = std::path::Path::new(prompt_file);
+        debug!(path = %prompt_file, exists = path.exists(), "Checking prompt file");
         if path.exists() {
-            debug!(path = %prompt_file, "Reading prompt from file");
-            return std::fs::read_to_string(path)
-                .with_context(|| format!("Failed to read prompt file: {}", prompt_file));
+            let content = std::fs::read_to_string(path)
+                .with_context(|| format!("Failed to read prompt file: {}", prompt_file))?;
+            debug!(path = %prompt_file, len = content.len(), "Read prompt from file");
+            return Ok(content);
         } else {
             // File specified but doesn't exist - error with helpful message
             anyhow::bail!(
@@ -806,15 +879,15 @@ fn resolve_prompt_content(event_loop_config: &ralph_core::EventLoopConfig) -> Re
     )
 }
 
-async fn run_loop(config: RalphConfig, color_mode: ColorMode, enable_tui: bool) -> Result<TerminationReason> {
-    run_loop_impl(config, color_mode, false, enable_tui).await
+async fn run_loop(config: RalphConfig, color_mode: ColorMode, enable_tui: bool, verbosity: Verbosity) -> Result<TerminationReason> {
+    run_loop_impl(config, color_mode, false, enable_tui, verbosity).await
 }
 
 /// Core loop implementation supporting both fresh start and resume modes.
 ///
 /// `resume`: If true, publishes `task.resume` instead of `task.start`,
 /// signaling the planner to read existing scratchpad rather than doing fresh gap analysis.
-async fn run_loop_impl(config: RalphConfig, color_mode: ColorMode, resume: bool, enable_tui: bool) -> Result<TerminationReason> {
+async fn run_loop_impl(config: RalphConfig, color_mode: ColorMode, resume: bool, enable_tui: bool, verbosity: Verbosity) -> Result<TerminationReason> {
     // Set up process group leadership per spec
     // "The orchestrator must run as a process group leader"
     process_management::setup_process_group();
@@ -1092,6 +1165,15 @@ async fn run_loop_impl(config: RalphConfig, color_mode: ColorMode, resume: bool,
             }
         };
 
+        // In verbose mode, print the full prompt before execution
+        if verbosity == Verbosity::Verbose {
+            eprintln!("\n{}", "═".repeat(80));
+            eprintln!("📋 PROMPT FOR {} (iteration {})", hat_id, iteration);
+            eprintln!("{}", "─".repeat(80));
+            eprintln!("{}", prompt);
+            eprintln!("{}\n", "═".repeat(80));
+        }
+
         // Execute the prompt (interactive or autonomous mode)
         // Get per-adapter timeout from config
         let timeout_secs = config.adapter_settings(&config.cli.backend).timeout;
@@ -1099,9 +1181,10 @@ async fn run_loop_impl(config: RalphConfig, color_mode: ColorMode, resume: bool,
 
         // Race execution against interrupt signal for immediate termination on Ctrl+C
         let mut interrupt_rx_clone = interrupt_rx.clone();
+        let interrupt_rx_for_pty = interrupt_rx.clone();
         let execute_future = async {
             if use_pty {
-                execute_pty(pty_executor.as_mut(), &backend, &config, &prompt, user_interactive).await
+                execute_pty(pty_executor.as_mut(), &backend, &config, &prompt, user_interactive, interrupt_rx_for_pty, verbosity).await
             } else {
                 let executor = CliExecutor::new(backend.clone());
                 let result = executor.execute(&prompt, stdout(), timeout).await?;
@@ -1204,6 +1287,8 @@ async fn execute_pty(
     config: &RalphConfig,
     prompt: &str,
     interactive: bool,
+    interrupt_rx: tokio::sync::watch::Receiver<bool>,
+    verbosity: Verbosity,
 ) -> Result<ExecutionOutcome> {
     use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 
@@ -1234,12 +1319,25 @@ async fn execute_pty(
         }
     });
 
-    // Run PTY executor
-    // Note: run_observe handles Ctrl+C internally and exits the process directly
+    // Run PTY executor with shared interrupt channel
     let result = if interactive {
-        exec.run_interactive(prompt).await
+        exec.run_interactive(prompt, interrupt_rx).await
     } else {
-        exec.run_observe(prompt).await
+        // Use streaming handler for non-interactive mode (respects verbosity)
+        match verbosity {
+            Verbosity::Quiet => {
+                let mut handler = QuietStreamHandler;
+                exec.run_observe_streaming(prompt, interrupt_rx, &mut handler).await
+            }
+            Verbosity::Normal => {
+                let mut handler = ConsoleStreamHandler::new(false);
+                exec.run_observe_streaming(prompt, interrupt_rx, &mut handler).await
+            }
+            Verbosity::Verbose => {
+                let mut handler = ConsoleStreamHandler::new(true);
+                exec.run_observe_streaming(prompt, interrupt_rx, &mut handler).await
+            }
+        }
     };
 
     match result {
@@ -1256,9 +1354,17 @@ async fn execute_pty(
                 }
             };
 
-            // Use stripped output for event parsing (ANSI sequences removed)
+            // Use extracted_text for event parsing when available (NDJSON backends like Claude),
+            // otherwise fall back to stripped_output (non-JSON backends or interactive mode).
+            // This fixes event parsing for Claude's stream-json output where event tags like
+            // <event topic="..."> are inside JSON string values and not directly visible.
+            let output_for_parsing = if pty_result.extracted_text.is_empty() {
+                pty_result.stripped_output
+            } else {
+                pty_result.extracted_text
+            };
             Ok(ExecutionOutcome {
-                output: pty_result.stripped_output,
+                output: output_for_parsing,
                 success: pty_result.success,
                 termination,
             })

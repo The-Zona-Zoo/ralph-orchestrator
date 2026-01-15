@@ -18,7 +18,9 @@
 // Exit codes and PIDs are always within i32 range in practice
 #![allow(clippy::cast_possible_wrap)]
 
-use crate::cli_backend::CliBackend;
+use crate::cli_backend::{CliBackend, OutputFormat};
+use crate::claude_stream::{ClaudeStreamEvent, ClaudeStreamParser, ContentBlock, UserContentBlock};
+use crate::stream_handler::{SessionResult, StreamHandler};
 use nix::sys::signal::{kill, Signal};
 use nix::unistd::Pid;
 use portable_pty::{native_pty_system, CommandBuilder, PtyPair, PtySize};
@@ -36,6 +38,12 @@ pub struct PtyExecutionResult {
     pub output: String,
     /// The ANSI-stripped output for event parsing.
     pub stripped_output: String,
+    /// Extracted text content from NDJSON stream (for Claude's stream-json output).
+    /// When Claude outputs `--output-format stream-json`, event tags like
+    /// `<event topic="...">` are inside JSON string values. This field contains
+    /// the extracted text content for proper event parsing.
+    /// Empty for non-JSON backends (use `stripped_output` instead).
+    pub extracted_text: String,
     /// Whether the process exited successfully.
     pub success: bool,
     /// The exit code if available.
@@ -237,17 +245,25 @@ impl PtyExecutor {
 
     /// Runs in observe mode (output-only, no input forwarding).
     ///
-    /// This is an async function that handles Ctrl+C directly by exiting the process.
+    /// This is an async function that listens for interrupt signals via the shared
+    /// `interrupt_rx` watch channel from the event loop.
     /// Uses a separate thread for blocking PTY reads and tokio::select! for signal handling.
     ///
-    /// Returns when the process exits or idle timeout triggers.
-    /// On Ctrl+C, exits the entire process with code 130.
+    /// Returns when the process exits, idle timeout triggers, or interrupt is received.
+    ///
+    /// # Arguments
+    /// * `prompt` - The prompt to execute
+    /// * `interrupt_rx` - Watch channel receiver for interrupt signals from the event loop
     ///
     /// # Errors
     ///
     /// Returns an error if PTY allocation fails, the command cannot be spawned,
     /// or an I/O error occurs during output handling.
-    pub async fn run_observe(&self, prompt: &str) -> io::Result<PtyExecutionResult> {
+    pub async fn run_observe(
+        &self,
+        prompt: &str,
+        mut interrupt_rx: tokio::sync::watch::Receiver<bool>,
+    ) -> io::Result<PtyExecutionResult> {
         // Keep temp_file alive for the duration of execution (large prompts use temp files)
         let (pair, mut child, stdin_input, _temp_file) = self.spawn_pty(prompt)?;
 
@@ -284,7 +300,9 @@ impl PtyExecutor {
         // Spawn blocking reader thread that sends output via channel
         let (output_tx, mut output_rx) = mpsc::channel::<OutputEvent>(256);
         let should_terminate_reader = Arc::clone(&should_terminate);
-        let tui_output_tx = if self.output_rx.is_none() {
+        // Check if TUI is handling output (output_rx taken by handle())
+        let tui_connected = self.output_rx.is_none();
+        let tui_output_tx = if tui_connected {
             Some(self.output_tx.clone())
         } else {
             None
@@ -344,21 +362,26 @@ impl PtyExecutor {
             });
 
             tokio::select! {
-                // Check for Ctrl+C - exit immediately
-                _ = tokio::signal::ctrl_c() => {
-                    info!("Ctrl+C received in observe mode, terminating");
-                    should_terminate.store(true, Ordering::SeqCst);
-                    let _ = self.terminate_child(&mut child, true);
-                    std::process::exit(130); // Standard exit code for SIGINT
+                // Check for interrupt signal from event loop
+                _ = interrupt_rx.changed() => {
+                    if *interrupt_rx.borrow() {
+                        info!("Interrupt received in observe mode, terminating");
+                        termination = TerminationType::UserInterrupt;
+                        should_terminate.store(true, Ordering::SeqCst);
+                        let _ = self.terminate_child(&mut child, true);
+                        break;
+                    }
                 }
 
                 // Check for output from reader thread
                 event = output_rx.recv() => {
                     match event {
                         Some(OutputEvent::Data(data)) => {
-                            // Write to stdout in real-time
-                            io::stdout().write_all(&data)?;
-                            io::stdout().flush()?;
+                            // Only write to stdout if TUI is NOT handling output
+                            if !tui_connected {
+                                io::stdout().write_all(&data)?;
+                                io::stdout().flush()?;
+                            }
                             output.extend_from_slice(&data);
                             last_activity = Instant::now();
                         }
@@ -398,29 +421,20 @@ impl PtyExecutor {
                 let exit_code = status.exit_code() as i32;
                 debug!(exit_status = ?status, exit_code, "Child process exited");
 
-                // If child was killed by SIGINT (exit code 130), exit Ralph too
-                // This handles the case where Ctrl+C goes to the PTY foreground process
-                if exit_code == 130 {
-                    info!("Child process killed by SIGINT, exiting Ralph");
-                    std::process::exit(130);
-                }
-
                 // Drain any remaining output from channel
                 while let Ok(event) = output_rx.try_recv() {
                     if let OutputEvent::Data(data) = event {
-                        io::stdout().write_all(&data)?;
-                        io::stdout().flush()?;
+                        if !tui_connected {
+                            io::stdout().write_all(&data)?;
+                            io::stdout().flush()?;
+                        }
                         output.extend_from_slice(&data);
                     }
                 }
 
-                return Ok(PtyExecutionResult {
-                    output: String::from_utf8_lossy(&output).to_string(),
-                    stripped_output: strip_ansi(&output),
-                    success: status.success(),
-                    exit_code: Some(exit_code),
-                    termination,
-                });
+                let final_termination = resolve_termination_type(exit_code, termination);
+                // run_observe doesn't parse JSON, so extracted_text is empty
+                return Ok(build_result(&output, status.success(), Some(exit_code), final_termination, String::new()));
             }
         }
 
@@ -429,30 +443,268 @@ impl PtyExecutor {
 
         // Wait for child to fully exit (interruptible + bounded)
         let status = self
-            .wait_for_exit(&mut child, Some(Duration::from_secs(2)))
+            .wait_for_exit(&mut child, Some(Duration::from_secs(2)), &mut interrupt_rx)
             .await?;
-        let (success, exit_code) = if let Some(status) = status {
-            let exit_code = status.exit_code() as i32;
 
-            // If child was killed by SIGINT (exit code 130), exit Ralph too
-            if exit_code == 130 {
-                info!("Child process killed by SIGINT, exiting Ralph");
-                std::process::exit(130);
+        let (success, exit_code, final_termination) = match status {
+            Some(s) => {
+                let code = s.exit_code() as i32;
+                (s.success(), Some(code), resolve_termination_type(code, termination))
             }
-
-            (status.success(), Some(exit_code))
-        } else {
-            warn!("Timed out waiting for child to exit after termination");
-            (false, None)
+            None => {
+                warn!("Timed out waiting for child to exit after termination");
+                (false, None, termination)
+            }
         };
 
-        Ok(PtyExecutionResult {
-            output: String::from_utf8_lossy(&output).to_string(),
-            stripped_output: strip_ansi(&output),
-            success,
-            exit_code,
-            termination,
-        })
+        // run_observe doesn't parse JSON, so extracted_text is empty
+        Ok(build_result(&output, success, exit_code, final_termination, String::new()))
+    }
+
+    /// Runs in observe mode with streaming event handling for JSON output.
+    ///
+    /// When the backend's output format is `StreamJson`, this method parses
+    /// NDJSON lines and dispatches events to the provided handler for real-time
+    /// display. For `Text` format, behaves identically to `run_observe`.
+    ///
+    /// # Arguments
+    /// * `prompt` - The prompt to execute
+    /// * `interrupt_rx` - Watch channel receiver for interrupt signals
+    /// * `handler` - Handler to receive streaming events
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if PTY allocation fails, the command cannot be spawned,
+    /// or an I/O error occurs during output handling.
+    pub async fn run_observe_streaming<H: StreamHandler>(
+        &self,
+        prompt: &str,
+        mut interrupt_rx: tokio::sync::watch::Receiver<bool>,
+        handler: &mut H,
+    ) -> io::Result<PtyExecutionResult> {
+        // Check output format to decide parsing strategy
+        let output_format = self.backend.output_format;
+
+        // If not StreamJson, delegate to regular run_observe
+        if output_format != OutputFormat::StreamJson {
+            return self.run_observe(prompt, interrupt_rx).await;
+        }
+
+        // Keep temp_file alive for the duration of execution
+        let (pair, mut child, stdin_input, _temp_file) = self.spawn_pty(prompt)?;
+
+        let reader = pair.master.try_clone_reader()
+            .map_err(|e| io::Error::other(e.to_string()))?;
+
+        // Write stdin input if present (for stdin prompt mode)
+        if let Some(ref input) = stdin_input {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let mut writer = pair.master.take_writer()
+                .map_err(|e| io::Error::other(e.to_string()))?;
+            writer.write_all(input.as_bytes())?;
+            writer.write_all(b"\n")?;
+            writer.flush()?;
+        }
+
+        drop(pair.slave);
+
+        let mut output = Vec::new();
+        let mut line_buffer = String::new();
+        // Accumulate extracted text from NDJSON for event parsing
+        let mut extracted_text = String::new();
+        let timeout_duration = if !self.config.interactive || self.config.idle_timeout_secs == 0 {
+            None
+        } else {
+            Some(Duration::from_secs(u64::from(self.config.idle_timeout_secs)))
+        };
+
+        let mut termination = TerminationType::Natural;
+        let mut last_activity = Instant::now();
+
+        let should_terminate = Arc::new(AtomicBool::new(false));
+
+        // Spawn blocking reader thread
+        let (output_tx, mut output_rx) = mpsc::channel::<OutputEvent>(256);
+        let should_terminate_reader = Arc::clone(&should_terminate);
+        let tui_connected = self.output_rx.is_none();
+        let tui_output_tx = if tui_connected {
+            Some(self.output_tx.clone())
+        } else {
+            None
+        };
+
+        debug!("Spawning PTY output reader thread (streaming mode)");
+        std::thread::spawn(move || {
+            let mut reader = reader;
+            let mut buf = [0u8; 4096];
+
+            loop {
+                if should_terminate_reader.load(Ordering::SeqCst) {
+                    debug!("PTY reader: termination requested");
+                    break;
+                }
+
+                match reader.read(&mut buf) {
+                    Ok(0) => {
+                        debug!("PTY reader: EOF");
+                        let _ = output_tx.blocking_send(OutputEvent::Eof);
+                        break;
+                    }
+                    Ok(n) => {
+                        let data = buf[..n].to_vec();
+                        if let Some(ref tx) = tui_output_tx {
+                            let _ = tx.send(data.clone());
+                        }
+                        if output_tx.blocking_send(OutputEvent::Data(data)).is_err() {
+                            break;
+                        }
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                    Err(e) => {
+                        debug!(error = %e, "PTY reader error");
+                        let _ = output_tx.blocking_send(OutputEvent::Error(e.to_string()));
+                        break;
+                    }
+                }
+            }
+        });
+
+        // Main event loop with JSON line parsing
+        loop {
+            let idle_timeout = timeout_duration.map(|d| {
+                let elapsed = last_activity.elapsed();
+                if elapsed >= d {
+                    Duration::from_millis(1)
+                } else {
+                    d - elapsed
+                }
+            });
+
+            tokio::select! {
+                _ = interrupt_rx.changed() => {
+                    if *interrupt_rx.borrow() {
+                        info!("Interrupt received in streaming observe mode, terminating");
+                        termination = TerminationType::UserInterrupt;
+                        should_terminate.store(true, Ordering::SeqCst);
+                        let _ = self.terminate_child(&mut child, true);
+                        break;
+                    }
+                }
+
+                event = output_rx.recv() => {
+                    match event {
+                        Some(OutputEvent::Data(data)) => {
+                            output.extend_from_slice(&data);
+                            last_activity = Instant::now();
+
+                            // Parse JSON lines from the data
+                            if let Ok(text) = std::str::from_utf8(&data) {
+                                line_buffer.push_str(text);
+
+                                // Process complete lines
+                                while let Some(newline_pos) = line_buffer.find('\n') {
+                                    let line = line_buffer[..newline_pos].to_string();
+                                    line_buffer = line_buffer[newline_pos + 1..].to_string();
+
+                                    if let Some(event) = ClaudeStreamParser::parse_line(&line) {
+                                        dispatch_stream_event(event, handler, &mut extracted_text);
+                                    }
+                                }
+                            }
+                        }
+                        Some(OutputEvent::Eof) | None => {
+                            debug!("Output channel closed");
+                            // Process any remaining content in buffer
+                            if !line_buffer.is_empty() {
+                                if let Some(event) = ClaudeStreamParser::parse_line(&line_buffer) {
+                                    dispatch_stream_event(event, handler, &mut extracted_text);
+                                }
+                            }
+                            break;
+                        }
+                        Some(OutputEvent::Error(e)) => {
+                            debug!(error = %e, "Reader thread reported error");
+                            handler.on_error(&e);
+                            break;
+                        }
+                    }
+                }
+
+                _ = async {
+                    if let Some(timeout) = idle_timeout {
+                        tokio::time::sleep(timeout).await;
+                    } else {
+                        std::future::pending::<()>().await;
+                    }
+                } => {
+                    warn!(
+                        timeout_secs = self.config.idle_timeout_secs,
+                        "Idle timeout triggered"
+                    );
+                    termination = TerminationType::IdleTimeout;
+                    should_terminate.store(true, Ordering::SeqCst);
+                    self.terminate_child(&mut child, true)?;
+                    break;
+                }
+            }
+
+            // Check if child has exited
+            if let Some(status) = child.try_wait().map_err(|e| io::Error::other(e.to_string()))? {
+                let exit_code = status.exit_code() as i32;
+                debug!(exit_status = ?status, exit_code, "Child process exited");
+
+                // Drain remaining output
+                while let Ok(event) = output_rx.try_recv() {
+                    if let OutputEvent::Data(data) = event {
+                        output.extend_from_slice(&data);
+                        if let Ok(text) = std::str::from_utf8(&data) {
+                            line_buffer.push_str(text);
+                            while let Some(newline_pos) = line_buffer.find('\n') {
+                                let line = line_buffer[..newline_pos].to_string();
+                                line_buffer = line_buffer[newline_pos + 1..].to_string();
+                                if let Some(event) = ClaudeStreamParser::parse_line(&line) {
+                                    dispatch_stream_event(event, handler, &mut extracted_text);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Process final buffer content
+                if !line_buffer.is_empty() {
+                    if let Some(event) = ClaudeStreamParser::parse_line(&line_buffer) {
+                        dispatch_stream_event(event, handler, &mut extracted_text);
+                    }
+                }
+
+                let final_termination = resolve_termination_type(exit_code, termination);
+                // Pass extracted_text for event parsing from NDJSON
+                return Ok(build_result(&output, status.success(), Some(exit_code), final_termination, extracted_text));
+            }
+        }
+
+        should_terminate.store(true, Ordering::SeqCst);
+
+        let status = self
+            .wait_for_exit(&mut child, Some(Duration::from_secs(2)), &mut interrupt_rx)
+            .await?;
+
+        let (success, exit_code, final_termination) = match status {
+            Some(s) => {
+                let code = s.exit_code() as i32;
+                (s.success(), Some(code), resolve_termination_type(code, termination))
+            }
+            None => {
+                warn!("Timed out waiting for child to exit after termination");
+                (false, None, termination)
+            }
+        };
+
+        // Pass extracted_text for event parsing from NDJSON
+        Ok(build_result(&output, success, exit_code, final_termination, extracted_text))
     }
 
     /// Runs in interactive mode (bidirectional I/O).
@@ -460,17 +712,26 @@ impl PtyExecutor {
     /// Uses `tokio::select!` for non-blocking I/O multiplexing between:
     /// 1. PTY output (from blocking reader via channel)
     /// 2. User input (from stdin thread via channel)
-    /// 3. Idle timeout
+    /// 3. Interrupt signal from event loop
+    /// 4. Idle timeout
     ///
     /// This design ensures Ctrl+C is always responsive, even when the PTY
     /// has no output (e.g., during long-running tool calls).
+    ///
+    /// # Arguments
+    /// * `prompt` - The prompt to execute
+    /// * `interrupt_rx` - Watch channel receiver for interrupt signals from the event loop
     ///
     /// # Errors
     ///
     /// Returns an error if PTY allocation fails, the command cannot be spawned,
     /// or an I/O error occurs during bidirectional communication.
     #[allow(clippy::too_many_lines)] // Complex state machine requires cohesive implementation
-    pub async fn run_interactive(&mut self, prompt: &str) -> io::Result<PtyExecutionResult> {
+    pub async fn run_interactive(
+        &mut self,
+        prompt: &str,
+        mut interrupt_rx: tokio::sync::watch::Receiver<bool>,
+    ) -> io::Result<PtyExecutionResult> {
         // Keep temp_file alive for the duration of execution (large prompts use temp files)
         let (pair, mut child, stdin_input, _temp_file) = self.spawn_pty(prompt)?;
 
@@ -502,7 +763,9 @@ impl PtyExecutor {
         // Spawn output reading task (blocking read wrapped in spawn_blocking via channel)
         let (output_tx, mut output_rx) = mpsc::channel::<OutputEvent>(256);
         let should_terminate_output = Arc::clone(&should_terminate);
-        let tui_output_tx = if self.output_rx.is_none() {
+        // Check if TUI is handling output (output_rx taken by handle())
+        let tui_connected = self.output_rx.is_none();
+        let tui_output_tx = if tui_connected {
             Some(self.output_tx.clone())
         } else {
             None
@@ -513,7 +776,6 @@ impl PtyExecutor {
             debug!("PTY output reader thread started");
             let mut reader = reader;
             let mut buf = [0u8; 4096];
-            let mut first_read = true;
 
             loop {
                 if should_terminate_output.load(Ordering::SeqCst) {
@@ -529,9 +791,6 @@ impl PtyExecutor {
                         break;
                     }
                     Ok(n) => {
-                        if first_read {
-                            first_read = false;
-                        }
                         let data = buf[..n].to_vec();
                         // Send to TUI channel if connected
                         if let Some(ref tx) = tui_output_tx {
@@ -616,28 +875,19 @@ impl PtyExecutor {
                 // Drain remaining output from channel
                 while let Ok(event) = output_rx.try_recv() {
                     if let OutputEvent::Data(data) = event {
-                        io::stdout().write_all(&data)?;
-                        io::stdout().flush()?;
+                        if !tui_connected {
+                            io::stdout().write_all(&data)?;
+                            io::stdout().flush()?;
+                        }
                         output.extend_from_slice(&data);
                     }
                 }
 
                 should_terminate.store(true, Ordering::SeqCst);
 
-                // If child was killed by SIGINT (exit code 130), exit Ralph too
-                // This handles the case where Ctrl+C goes to the PTY foreground process
-                if exit_code == 130 {
-                    info!("Child process killed by SIGINT, exiting Ralph");
-                    std::process::exit(130);
-                }
-
-                return Ok(PtyExecutionResult {
-                    output: String::from_utf8_lossy(&output).to_string(),
-                    stripped_output: strip_ansi(&output),
-                    success: status.success(),
-                    exit_code: Some(exit_code),
-                    termination,
-                });
+                let final_termination = resolve_termination_type(exit_code, termination);
+                // run_interactive doesn't parse JSON, so extracted_text is empty
+                return Ok(build_result(&output, status.success(), Some(exit_code), final_termination, String::new()));
             }
 
             // Build the timeout future (or a never-completing one if disabled)
@@ -660,8 +910,11 @@ impl PtyExecutor {
                 output_event = output_rx.recv() => {
                     match output_event {
                         Some(OutputEvent::Data(data)) => {
-                            io::stdout().write_all(&data)?;
-                            io::stdout().flush()?;
+                            // Only write to stdout if TUI is NOT handling output
+                            if !tui_connected {
+                                io::stdout().write_all(&data)?;
+                                io::stdout().flush()?;
+                            }
                             output.extend_from_slice(&data);
 
                             last_activity = Instant::now();
@@ -721,34 +974,38 @@ impl PtyExecutor {
                     }
                 }
 
-                // TUI input received
+                // TUI input received (convert to InputEvent for unified handling)
                 tui_input = self.input_rx.recv() => {
                     if let Some(data) = tui_input {
-                        if data.len() == 1 && data[0] == 3 {
-                            match ctrl_c_state.handle_ctrl_c(Instant::now()) {
-                                CtrlCAction::ForwardAndStartWindow => {
-                                    let _ = writer.write_all(&data);
-                                    let _ = writer.flush();
-                                    last_activity = Instant::now();
-                                }
-                                CtrlCAction::Terminate => {
-                                    info!("Double Ctrl+C detected, terminating");
-                                    termination = TerminationType::UserInterrupt;
-                                    should_terminate.store(true, Ordering::SeqCst);
-                                    self.terminate_child(&mut child, true)?;
-                                    break;
+                        match InputEvent::from_bytes(data) {
+                            InputEvent::CtrlC => {
+                                match ctrl_c_state.handle_ctrl_c(Instant::now()) {
+                                    CtrlCAction::ForwardAndStartWindow => {
+                                        let _ = writer.write_all(&[3]);
+                                        let _ = writer.flush();
+                                        last_activity = Instant::now();
+                                    }
+                                    CtrlCAction::Terminate => {
+                                        info!("Double Ctrl+C detected, terminating");
+                                        termination = TerminationType::UserInterrupt;
+                                        should_terminate.store(true, Ordering::SeqCst);
+                                        self.terminate_child(&mut child, true)?;
+                                        break;
+                                    }
                                 }
                             }
-                        } else if data.len() == 1 && data[0] == 28 {
-                            info!("Ctrl+\\ detected, force killing");
-                            termination = TerminationType::ForceKill;
-                            should_terminate.store(true, Ordering::SeqCst);
-                            self.terminate_child(&mut child, false)?;
-                            break;
-                        } else {
-                            let _ = writer.write_all(&data);
-                            let _ = writer.flush();
-                            last_activity = Instant::now();
+                            InputEvent::CtrlBackslash => {
+                                info!("Ctrl+\\ detected, force killing");
+                                termination = TerminationType::ForceKill;
+                                should_terminate.store(true, Ordering::SeqCst);
+                                self.terminate_child(&mut child, false)?;
+                                break;
+                            }
+                            InputEvent::Data(bytes) => {
+                                let _ = writer.write_all(&bytes);
+                                let _ = writer.flush();
+                                last_activity = Instant::now();
+                            }
                         }
                     }
                 }
@@ -788,6 +1045,17 @@ impl PtyExecutor {
                     self.terminate_child(&mut child, true)?;
                     break;
                 }
+
+                // Interrupt signal from event loop
+                _ = interrupt_rx.changed() => {
+                    if *interrupt_rx.borrow() {
+                        info!("Interrupt received in interactive mode, terminating");
+                        termination = TerminationType::UserInterrupt;
+                        should_terminate.store(true, Ordering::SeqCst);
+                        self.terminate_child(&mut child, true)?;
+                        break;
+                    }
+                }
             }
         }
 
@@ -796,30 +1064,22 @@ impl PtyExecutor {
 
         // Wait for child to fully exit (interruptible + bounded)
         let status = self
-            .wait_for_exit(&mut child, Some(Duration::from_secs(2)))
+            .wait_for_exit(&mut child, Some(Duration::from_secs(2)), &mut interrupt_rx)
             .await?;
-        let (success, exit_code) = if let Some(status) = status {
-            let exit_code = status.exit_code() as i32;
 
-            // If child was killed by SIGINT (exit code 130), exit Ralph too
-            if exit_code == 130 {
-                info!("Child process killed by SIGINT, exiting Ralph");
-                std::process::exit(130);
+        let (success, exit_code, final_termination) = match status {
+            Some(s) => {
+                let code = s.exit_code() as i32;
+                (s.success(), Some(code), resolve_termination_type(code, termination))
             }
-
-            (status.success(), Some(exit_code))
-        } else {
-            warn!("Timed out waiting for child to exit after termination");
-            (false, None)
+            None => {
+                warn!("Timed out waiting for child to exit after termination");
+                (false, None, termination)
+            }
         };
 
-        Ok(PtyExecutionResult {
-            output: String::from_utf8_lossy(&output).to_string(),
-            stripped_output: strip_ansi(&output),
-            success,
-            exit_code,
-            termination,
-        })
+        // run_interactive doesn't parse JSON, so extracted_text is empty
+        Ok(build_result(&output, success, exit_code, final_termination, String::new()))
     }
 
     /// Terminates the child process.
@@ -862,12 +1122,13 @@ impl PtyExecutor {
 
     /// Waits for the child process to exit, optionally with a timeout.
     ///
-    /// This is interruptible by Ctrl+C in observe mode since tokio registers
-    /// a signal handler; without this loop, Ctrl+C is ignored after termination.
+    /// This is interruptible by the shared interrupt channel from the event loop.
+    /// When interrupted, returns `Ok(None)` to let the caller handle termination.
     async fn wait_for_exit(
         &self,
         child: &mut Box<dyn portable_pty::Child + Send>,
         max_wait: Option<Duration>,
+        interrupt_rx: &mut tokio::sync::watch::Receiver<bool>,
     ) -> io::Result<Option<portable_pty::ExitStatus>> {
         let start = Instant::now();
 
@@ -886,9 +1147,11 @@ impl PtyExecutor {
             }
 
             tokio::select! {
-                _ = tokio::signal::ctrl_c() => {
-                    info!("Ctrl+C received while waiting for child exit, exiting");
-                    std::process::exit(130);
+                _ = interrupt_rx.changed() => {
+                    if *interrupt_rx.borrow() {
+                        info!("Interrupt received while waiting for child exit");
+                        return Ok(None);
+                    }
                 }
                 _ = tokio::time::sleep(Duration::from_millis(50)) => {}
             }
@@ -907,6 +1170,20 @@ enum InputEvent {
     Data(Vec<u8>),
 }
 
+impl InputEvent {
+    /// Creates an InputEvent from raw bytes.
+    fn from_bytes(data: Vec<u8>) -> Self {
+        if data.len() == 1 {
+            match data[0] {
+                3 => return InputEvent::CtrlC,
+                28 => return InputEvent::CtrlBackslash,
+                _ => {}
+            }
+        }
+        InputEvent::Data(data)
+    }
+}
+
 /// Output events from the PTY.
 #[derive(Debug)]
 enum OutputEvent {
@@ -918,18 +1195,6 @@ enum OutputEvent {
     Error(String),
 }
 
-/// Trait for handling PTY output.
-pub trait OutputHandler {
-    /// Handle output data from the PTY.
-    fn handle_output(&mut self, data: Vec<u8>);
-}
-
-/// Trait for providing input to the PTY.
-pub trait InputSource {
-    /// Poll for input data. Returns None if no input is available.
-    fn poll_input(&mut self) -> Option<Vec<u8>>;
-}
-
 /// Strips ANSI escape sequences from raw bytes.
 ///
 /// Uses `strip-ansi-escapes` for direct byte-level ANSI removal without terminal
@@ -938,6 +1203,90 @@ pub trait InputSource {
 fn strip_ansi(bytes: &[u8]) -> String {
     let stripped = strip_ansi_escapes::strip(bytes);
     String::from_utf8_lossy(&stripped).into_owned()
+}
+
+/// Determines the final termination type, accounting for SIGINT exit code.
+///
+/// Exit code 130 indicates the process was killed by SIGINT (Ctrl+C forwarded to PTY).
+fn resolve_termination_type(exit_code: i32, default: TerminationType) -> TerminationType {
+    if exit_code == 130 {
+        info!("Child process killed by SIGINT");
+        TerminationType::UserInterrupt
+    } else {
+        default
+    }
+}
+
+/// Dispatches a Claude stream event to the appropriate handler method.
+/// Also accumulates text content into `extracted_text` for event parsing.
+fn dispatch_stream_event<H: StreamHandler>(
+    event: ClaudeStreamEvent,
+    handler: &mut H,
+    extracted_text: &mut String,
+) {
+    match event {
+        ClaudeStreamEvent::System { .. } => {
+            // Session initialization - could log in verbose mode but not user-facing
+        }
+        ClaudeStreamEvent::Assistant { message, .. } => {
+            for block in message.content {
+                match block {
+                    ContentBlock::Text { text } => {
+                        handler.on_text(&text);
+                        // Accumulate text for event parsing
+                        extracted_text.push_str(&text);
+                        extracted_text.push('\n');
+                    }
+                    ContentBlock::ToolUse { name, id, .. } => handler.on_tool_call(&name, &id),
+                }
+            }
+        }
+        ClaudeStreamEvent::User { message } => {
+            for block in message.content {
+                match block {
+                    UserContentBlock::ToolResult { tool_use_id, content } => {
+                        handler.on_tool_result(&tool_use_id, &content);
+                    }
+                }
+            }
+        }
+        ClaudeStreamEvent::Result { duration_ms, total_cost_usd, num_turns, is_error } => {
+            if is_error {
+                handler.on_error("Session ended with error");
+            }
+            handler.on_complete(&SessionResult {
+                duration_ms,
+                total_cost_usd,
+                num_turns,
+                is_error,
+            });
+        }
+    }
+}
+
+/// Builds a `PtyExecutionResult` from the accumulated output and exit status.
+///
+/// # Arguments
+/// * `output` - Raw bytes from PTY
+/// * `success` - Whether process exited successfully
+/// * `exit_code` - Process exit code if available
+/// * `termination` - How the process was terminated
+/// * `extracted_text` - Text extracted from NDJSON stream (for Claude's stream-json)
+fn build_result(
+    output: &[u8],
+    success: bool,
+    exit_code: Option<i32>,
+    termination: TerminationType,
+    extracted_text: String,
+) -> PtyExecutionResult {
+    PtyExecutionResult {
+        output: String::from_utf8_lossy(output).to_string(),
+        stripped_output: strip_ansi(output),
+        extracted_text,
+        success,
+        exit_code,
+        termination,
+    }
 }
 
 #[cfg(test)]
@@ -1072,5 +1421,32 @@ mod tests {
         // Timeout calculation would give full duration minus small elapsed
         let new_remaining = timeout_duration.saturating_sub(elapsed);
         assert!(new_remaining > Duration::from_secs(29)); // Should be nearly full timeout
+    }
+
+    #[test]
+    fn test_extracted_text_field_exists() {
+        // Test that PtyExecutionResult has extracted_text field
+        // This is for NDJSON output where event tags are inside JSON strings
+        let result = PtyExecutionResult {
+            output: String::new(),
+            stripped_output: String::new(),
+            extracted_text: String::from("<event topic=\"build.done\">Test</event>"),
+            success: true,
+            exit_code: Some(0),
+            termination: TerminationType::Natural,
+        };
+
+        assert!(result.extracted_text.contains("<event topic=\"build.done\">"));
+    }
+
+    #[test]
+    fn test_build_result_includes_extracted_text() {
+        // Test that build_result properly handles extracted_text
+        let output = b"raw output";
+        let extracted = "extracted text with <event topic=\"test\">payload</event>";
+        let result = build_result(output, true, Some(0), TerminationType::Natural, extracted.to_string());
+
+        assert_eq!(result.extracted_text, extracted);
+        assert!(result.stripped_output.contains("raw output"));
     }
 }
