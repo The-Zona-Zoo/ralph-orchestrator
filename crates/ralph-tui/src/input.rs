@@ -53,7 +53,7 @@ impl InputRouter {
         }
     }
 
-    /// Creates a new InputRouter with a custom prefix key.
+    /// Creates a new `InputRouter` with a custom prefix key.
     pub fn with_prefix(prefix_key: KeyCode, prefix_modifiers: KeyModifiers) -> Self {
         Self {
             mode: InputMode::Normal,

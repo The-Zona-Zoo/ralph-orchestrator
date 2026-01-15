@@ -43,6 +43,7 @@ impl Tui {
     }
 
     /// Sets custom prefix key.
+    #[must_use]
     pub fn with_prefix(mut self, prefix_key: KeyCode, prefix_modifiers: KeyModifiers) -> Self {
         self.prefix_key = prefix_key;
         self.prefix_modifiers = prefix_modifiers;
@@ -50,6 +51,7 @@ impl Tui {
     }
 
     /// Sets the PTY handle for terminal output.
+    #[must_use]
     pub fn with_pty(mut self, pty_handle: PtyHandle) -> Self {
         self.pty_handle = Some(pty_handle);
         self
@@ -66,6 +68,15 @@ impl Tui {
     }
 
     /// Runs the TUI application loop.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `with_pty()` was not called before running.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the terminal cannot be initialized or
+    /// if the application loop encounters an unrecoverable error.
     pub async fn run(self) -> Result<()> {
         let pty_handle = self
             .pty_handle

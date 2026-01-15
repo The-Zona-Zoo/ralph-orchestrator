@@ -104,7 +104,7 @@ impl ScrollManager {
 
     /// Starts a search with the given query and direction.
     pub fn start_search(&mut self, query: String, direction: SearchDirection, lines: &[String]) {
-        let matches = self.find_matches(&query, lines);
+        let matches = Self::find_matches(&query, lines);
         let current_match = if matches.is_empty() {
             0
         } else {
@@ -127,7 +127,7 @@ impl ScrollManager {
     }
 
     /// Finds all line numbers containing the query (case-insensitive).
-    fn find_matches(&self, query: &str, lines: &[String]) -> Vec<usize> {
+    fn find_matches(query: &str, lines: &[String]) -> Vec<usize> {
         let query_lower = query.to_lowercase();
         lines
             .iter()

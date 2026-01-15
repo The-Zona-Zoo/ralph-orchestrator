@@ -79,6 +79,7 @@ impl App {
     }
 
     /// Runs the TUI event loop.
+    #[allow(clippy::too_many_lines)]
     pub async fn run(mut self) -> Result<()> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();

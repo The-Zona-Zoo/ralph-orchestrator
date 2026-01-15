@@ -106,8 +106,7 @@ impl TuiState {
     pub fn get_pending_hat_display(&self) -> String {
         self.pending_hat
             .as_ref()
-            .map(|(_, display)| display.clone())
-            .unwrap_or_else(|| "—".to_string())
+            .map_or_else(|| "—".to_string(), |(_, display)| display.clone())
     }
 
     /// Time since loop started.
@@ -123,8 +122,7 @@ impl TuiState {
     /// True if event received in last 2 seconds.
     pub fn is_active(&self) -> bool {
         self.last_event_at
-            .map(|t| t.elapsed() < Duration::from_secs(2))
-            .unwrap_or(false)
+            .is_some_and(|t| t.elapsed() < Duration::from_secs(2))
     }
 
     /// True if iteration changed since last check.

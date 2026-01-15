@@ -51,8 +51,7 @@ pub fn render(state: &TuiState, scroll_manager: &ScrollManager) -> Paragraph<'st
     let last_event = state
         .last_event
         .as_ref()
-        .map(|e| format!("Last: {}", e))
-        .unwrap_or_else(|| "Last: —".to_string());
+        .map_or_else(|| "Last: —".to_string(), |e| format!("Last: {e}"));
 
     let indicator = if state.pending_hat.is_none() {
         Span::styled("■ done", Style::default().fg(Color::Blue))

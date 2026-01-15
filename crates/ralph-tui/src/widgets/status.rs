@@ -10,7 +10,7 @@ fn format_duration(d: Duration) -> String {
     let h = secs / 3600;
     let m = (secs % 3600) / 60;
     let s = secs % 60;
-    format!("{:02}:{:02}:{:02}", h, m, s)
+    format!("{h:02}:{m:02}:{s:02}")
 }
 
 pub fn render(state: &TuiState) -> Paragraph<'static> {
@@ -18,12 +18,10 @@ pub fn render(state: &TuiState) -> Paragraph<'static> {
     let iteration = state.iteration + 1;
     let loop_time = state
         .get_loop_elapsed()
-        .map(format_duration)
-        .unwrap_or_else(|| "—".to_string());
+        .map_or_else(|| "—".to_string(), format_duration);
     let iter_time = state
         .get_iteration_elapsed()
-        .map(format_duration)
-        .unwrap_or_else(|| "—".to_string());
+        .map_or_else(|| "—".to_string(), format_duration);
 
     let lines = vec![
         Line::from(""),

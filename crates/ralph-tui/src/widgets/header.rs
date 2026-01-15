@@ -21,7 +21,7 @@ pub fn render(state: &TuiState) -> Paragraph<'static> {
         let total_secs = elapsed.as_secs();
         let mins = total_secs / 60;
         let secs = total_secs % 60;
-        spans.push(Span::raw(format!(" {:02}:{:02}", mins, secs)));
+        spans.push(Span::raw(format!(" {mins:02}:{secs:02}")));
     }
 
     // | 🎯 Hat
