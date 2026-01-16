@@ -68,6 +68,22 @@ See [AGENTS.md](AGENTS.md) for the full philosophy.
   - [Codex](https://github.com/openai/codex)
   - [Amp](https://github.com/sourcegraph/amp)
 
+### Via npm (Recommended)
+
+```bash
+# Install globally
+npm install -g @ralph-orchestrator/ralph
+
+# Or run directly with npx
+npx @ralph-orchestrator/ralph --version
+```
+
+### Via Cargo
+
+```bash
+cargo install ralph-cli
+```
+
 ### From Source
 
 ```bash

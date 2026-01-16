@@ -125,7 +125,11 @@ ci = "github"
 # Windows excluded: Ralph requires Unix PTY and signal handling
 targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu"]
 # The installers to generate for each app
-installers = ["shell"]
+installers = ["shell", "npm"]
+# npm package scope (creates @ralph-orchestrator/ralph)
+npm-scope = "@ralph-orchestrator"
+# Publish jobs to run in CI
+publish-jobs = ["npm"]
 # Extra static files to include in each App (path relative to this Cargo.toml's dir)
 include = ["README.md", "LICENSE"]
 # The preferred dist version to use in CI (Cargo.toml SemVer syntax)
