@@ -125,11 +125,7 @@ ci = "github"
 # Windows excluded: Ralph requires Unix PTY and signal handling
 targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu"]
 # The installers to generate for each app
-installers = ["shell", "homebrew"]
-# Publish jobs to run in CI (auto-publishes Homebrew formula to tap)
-publish-jobs = ["homebrew"]
-# Homebrew tap repository for formula publishing (owner/repo or owner/repo format)
-tap = "mikeyobrien/homebrew-tap"
+installers = ["shell"]
 # Extra static files to include in each App (path relative to this Cargo.toml's dir)
 include = ["README.md", "LICENSE"]
 # The preferred dist version to use in CI (Cargo.toml SemVer syntax)
