@@ -3,6 +3,7 @@
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.75+-orange)](https://www.rust-lang.org/)
 [![Build](https://img.shields.io/github/actions/workflow/status/mikeyobrien/ralph-orchestrator/ci.yml?branch=main&label=CI)](https://github.com/mikeyobrien/ralph-orchestrator/actions)
+[![Coverage](https://img.shields.io/badge/coverage-65%25-yellowgreen)](coverage/index.html)
 [![Mentioned in Awesome Claude Code](https://awesome.re/mentioned-badge.svg)](https://github.com/hesreallyhim/awesome-claude-code)
 
 
@@ -23,6 +24,7 @@ v1.0.0 was ralphed into existence with little oversight and guidance. v2.0.0 is 
 - [Installation](#installation)
 - [Quick Start](#quick-start)
 - [Configuration](#configuration)
+- [Custom Backends and Per-Hat Configuration](#custom-backends-and-per-hat-configuration)
 - [Presets](#presets)
 - [Key Concepts](#key-concepts)
 - [CLI Reference](#cli-reference)
@@ -324,6 +326,81 @@ hats:
       What this hat should do...
 ```
 
+
+## Custom Backends and Per-Hat Configuration
+
+### Custom Backends
+
+Beyond the built-in backends (Claude, Kiro, Gemini, Codex, Amp, Copilot, OpenCode), you can define custom backends to integrate any CLI-based AI agent:
+
+```yaml
+cli:
+  backend: "custom"
+  command: "my-agent"
+  args: ["--headless", "--auto-approve"]
+  prompt_mode: "arg"        # "arg" or "stdin"
+  prompt_flag: "-p"         # Optional: flag for prompt argument
+```
+
+| Field | Description |
+|-------|-------------|
+| `command` | The CLI command to execute |
+| `args` | Arguments inserted before the prompt |
+| `prompt_mode` | How to pass the prompt: `arg` (command-line argument) or `stdin` |
+| `prompt_flag` | Flag preceding the prompt (e.g., `-p`, `--prompt`). If omitted, prompt is positional. |
+
+### Per-Hat Backend Configuration
+
+Different hats can use different backends, enabling specialized tools for specialized tasks:
+
+```yaml
+cli:
+  backend: "claude"  # Default for Ralph and hats without explicit backend
+
+hats:
+  builder:
+    name: "🔨 Builder"
+    description: "Implements code"
+    triggers: ["build.task"]
+    publishes: ["build.done"]
+    backend: "claude"        # Explicit: Claude for coding
+
+  researcher:
+    name: "🔍 Researcher"
+    description: "Researches technical questions"
+    triggers: ["research.task"]
+    publishes: ["research.done"]
+    backend:                 # Kiro with custom agent (has MCP tools)
+      type: "kiro"
+      agent: "researcher"
+
+  reviewer:
+    name: "👀 Reviewer"
+    description: "Reviews code changes"
+    triggers: ["review.task"]
+    publishes: ["review.done"]
+    backend: "gemini"        # Different model for fresh perspective
+```
+
+**Backend Types:**
+
+| Type | Syntax | Invocation |
+|------|--------|------------|
+| Named | `backend: "claude"` | Uses standard backend configuration |
+| Kiro Agent | `backend: { type: "kiro", agent: "builder" }` | `kiro-cli --agent builder ...` |
+| Custom | `backend: { command: "...", args: [...] }` | Your custom command |
+
+**When to mix backends:**
+
+| Scenario | Recommended Backend |
+|----------|---------------------|
+| Complex coding | Claude (best reasoning) |
+| AWS/cloud tasks | Kiro with agent (MCP tools) |
+| Code review | Different model (fresh perspective) |
+| Internal tools | Custom backend |
+| Cost optimization | Faster/cheaper model for simple tasks |
+
+Hats without explicit `backend` inherit from `cli.backend`.
 
 ## Presets
 
