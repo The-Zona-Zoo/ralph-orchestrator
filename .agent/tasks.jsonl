@@ -1,0 +1,3 @@
+{"id":"task-1769046733-f668","title":"Create greeter CLI example in examples/greeter.rs","status":"closed","priority":2,"blocked_by":[],"created":"2026-01-22T01:52:13.390766+00:00","closed":"2026-01-22T01:52:48.891656+00:00"}
+{"id":"task-1769047277-c7d9","title":"Design multi-loop memory+tasks E2E scenario","status":"closed","priority":1,"blocked_by":[],"created":"2026-01-22T02:01:17.313311+00:00","closed":"2026-01-22T02:04:04.282196+00:00"}
+{"id":"task-1769047711-aad9","title":"Research and improve memory CLI UX output for human readability","status":"closed","priority":1,"blocked_by":[],"created":"2026-01-22T02:08:31.502495+00:00","closed":"2026-01-22T02:11:59.892194+00:00"}
