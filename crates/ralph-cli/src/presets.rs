@@ -33,6 +33,11 @@ const PRESETS: &[EmbeddedPreset] = &[
         content: include_str!("../presets/code-archaeology.yml"),
     },
     EmbeddedPreset {
+        name: "confession-loop",
+        description: "Confidence-aware completion via structured self-assessment",
+        content: include_str!("../presets/confession-loop.yml"),
+    },
+    EmbeddedPreset {
         name: "debug",
         description: "Bug investigation and root cause analysis",
         content: include_str!("../presets/debug.yml"),
@@ -158,7 +163,7 @@ mod tests {
     #[test]
     fn test_list_presets_returns_all() {
         let presets = list_presets();
-        assert_eq!(presets.len(), 23, "Expected 23 presets");
+        assert_eq!(presets.len(), 24, "Expected 24 presets");
     }
 
     #[test]
@@ -169,6 +174,31 @@ mod tests {
         assert_eq!(preset.name, "tdd-red-green");
         assert!(!preset.description.is_empty());
         assert!(!preset.content.is_empty());
+    }
+
+    #[test]
+    fn test_confession_loop_preset_is_embedded() {
+        let preset =
+            get_preset("confession-loop").expect("confession-loop preset should exist (issue #74)");
+        assert!(!preset.description.is_empty());
+        assert!(preset.content.contains("confession.issues_found"));
+        assert!(preset.content.contains("confession.clean"));
+        assert!(preset.content.contains("Confidence (0-100)"));
+        assert!(
+            preset
+                .content
+                .contains("If you were triggered by `confession.issues_found`:")
+        );
+        assert!(
+            preset
+                .content
+                .contains("Do not output the completion promise on this path.")
+        );
+        assert!(
+            preset
+                .content
+                .contains("If you were triggered by `confession.clean`:")
+        );
     }
 
     #[test]
@@ -215,7 +245,8 @@ mod tests {
     #[test]
     fn test_preset_names_returns_all_names() {
         let names = preset_names();
-        assert_eq!(names.len(), 23);
+        assert_eq!(names.len(), 24);
+        assert!(names.contains(&"confession-loop"));
         assert!(names.contains(&"tdd-red-green"));
         assert!(names.contains(&"debug"));
     }
