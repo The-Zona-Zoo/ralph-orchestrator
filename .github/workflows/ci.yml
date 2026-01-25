@@ -71,8 +71,8 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
-      - name: Build ralph-e2e
-        run: cargo build --release -p ralph-e2e
+      - name: Build ralph and ralph-e2e
+        run: cargo build --release -p ralph-cli -p ralph-e2e
       - name: Run mock E2E tests
         run: ./target/release/ralph-e2e --mock --skip-analysis
       - name: Upload E2E report
