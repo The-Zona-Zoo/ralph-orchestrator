@@ -27,7 +27,7 @@ use anyhow::{Context, Result};
 use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 use ralph_adapters::detect_backend;
 use ralph_core::{
-    EventHistory, LockError, LoopContext, LoopLock, RalphConfig,
+    EventHistory, LockError, LoopContext, LoopEntry, LoopLock, LoopRegistry, RalphConfig,
     worktree::{WorktreeConfig, create_worktree, ensure_gitignore},
 };
 use std::fs;
@@ -1096,6 +1096,17 @@ async fn run_command(
                 context
                     .setup_memory_symlink()
                     .context("Failed to create memory symlink in worktree")?;
+
+                // Register this loop in the registry so `ralph loops` can track it
+                let registry = LoopRegistry::new(workspace_root);
+                let entry = LoopEntry::with_workspace(
+                    &prompt_summary,
+                    Some(worktree.path.to_string_lossy().to_string()),
+                    worktree.path.to_string_lossy().to_string(),
+                );
+                if let Err(e) = registry.register(entry) {
+                    warn!("Failed to register loop in registry: {}", e);
+                }
 
                 // Update config to use worktree paths
                 // The scratchpad and other paths should resolve to the worktree

@@ -224,6 +224,21 @@ impl LoopRegistry {
         Ok(removed)
     }
 
+    /// Deregisters all entries for the current process.
+    ///
+    /// This is useful for cleanup on termination, since each process
+    /// can only have one active loop entry.
+    pub fn deregister_current_process(&self) -> Result<bool, RegistryError> {
+        let pid = std::process::id();
+        let mut found = false;
+        self.with_lock(|data| {
+            let original_len = data.loops.len();
+            data.loops.retain(|e| e.pid != pid);
+            found = data.loops.len() != original_len;
+        })?;
+        Ok(found)
+    }
+
     /// Executes an operation with the registry file locked.
     #[cfg(unix)]
     fn with_lock<F>(&self, f: F) -> Result<(), RegistryError>
@@ -576,5 +591,25 @@ mod tests {
 
         let deserialized: LoopEntry = serde_json::from_str(&json).unwrap();
         assert!(deserialized.worktree_path.is_none());
+    }
+
+    #[test]
+    fn test_deregister_current_process() {
+        let temp_dir = TempDir::new().unwrap();
+        let registry = LoopRegistry::new(temp_dir.path());
+
+        // Register an entry (uses current PID)
+        let entry = LoopEntry::new("test prompt", None::<String>);
+        registry.register(entry).unwrap();
+        assert_eq!(registry.list().unwrap().len(), 1);
+
+        // Deregister by current process
+        let found = registry.deregister_current_process().unwrap();
+        assert!(found);
+        assert_eq!(registry.list().unwrap().len(), 0);
+
+        // Second deregister should return false (nothing to remove)
+        let found = registry.deregister_current_process().unwrap();
+        assert!(!found);
     }
 }

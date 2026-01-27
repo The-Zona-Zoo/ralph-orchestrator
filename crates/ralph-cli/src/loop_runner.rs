@@ -388,9 +388,7 @@ pub async fn run_loop_impl(
                 TerminationReason::Interrupted | TerminationReason::Stopped
             ) {
                 let registry = LoopRegistry::new(ctx.repo_root());
-                if let Some(loop_id) = ctx.loop_id()
-                    && let Err(e) = registry.deregister(loop_id)
-                {
+                if let Err(e) = registry.deregister_current_process() {
                     warn!("Failed to deregister loop from registry: {}", e);
                 }
             }
