@@ -252,6 +252,14 @@ impl LoopContext {
         self.agent_dir().join("summary.md")
     }
 
+    /// Path to the handoff markdown file.
+    ///
+    /// Generated on loop completion to provide context for the next session.
+    /// Contains completed tasks, remaining work, and a ready-to-paste prompt.
+    pub fn handoff_path(&self) -> PathBuf {
+        self.agent_dir().join("handoff.md")
+    }
+
     /// Path to the diagnostics directory.
     ///
     /// Each loop has its own diagnostics output.
@@ -626,6 +634,10 @@ mod tests {
         assert_eq!(
             ctx.summary_path(),
             PathBuf::from("/project/.ralph/agent/summary.md")
+        );
+        assert_eq!(
+            ctx.handoff_path(),
+            PathBuf::from("/project/.ralph/agent/handoff.md")
         );
         assert_eq!(ctx.specs_dir(), PathBuf::from("/project/.ralph/specs"));
         assert_eq!(ctx.code_tasks_dir(), PathBuf::from("/project/.ralph/tasks"));

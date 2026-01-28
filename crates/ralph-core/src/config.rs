@@ -621,6 +621,7 @@ fn default_guardrails() -> Vec<String> {
         "Fresh context each iteration - scratchpad is memory".to_string(),
         "Don't assume 'not implemented' - search first".to_string(),
         "Backpressure is law - tests/typecheck/lint must pass".to_string(),
+        "Commit atomically - one logical change per commit, capture the why".to_string(),
     ]
 }
 
@@ -864,6 +865,9 @@ impl Default for TasksConfig {
 /// features:
 ///   parallel: true  # Enable parallel loops via git worktrees
 ///   auto_merge: false  # Auto-merge worktree branches on completion
+///   loop_naming:
+///     format: human-readable  # or "timestamp" for legacy format
+///     max_length: 50
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FeaturesConfig {
@@ -881,6 +885,14 @@ pub struct FeaturesConfig {
     /// main branch after a parallel loop completes.
     #[serde(default)]
     pub auto_merge: bool,
+
+    /// Loop naming configuration for worktree branches.
+    ///
+    /// Controls how loop IDs are generated for parallel loops.
+    /// Default uses human-readable format: `fix-header-swift-peacock`
+    /// Legacy timestamp format: `ralph-YYYYMMDD-HHMMSS-XXXX`
+    #[serde(default)]
+    pub loop_naming: crate::loop_name::LoopNamingConfig,
 }
 
 impl Default for FeaturesConfig {
@@ -888,6 +900,7 @@ impl Default for FeaturesConfig {
         Self {
             parallel: true,    // Parallel loops enabled by default
             auto_merge: false, // Auto-merge disabled by default for safety
+            loop_naming: crate::loop_name::LoopNamingConfig::default(),
         }
     }
 }
@@ -1426,10 +1439,11 @@ hats:
         assert_eq!(config.core.scratchpad, ".ralph/agent/scratchpad.md");
         assert_eq!(config.core.specs_dir, ".ralph/specs/");
         // Default guardrails per spec
-        assert_eq!(config.core.guardrails.len(), 3);
+        assert_eq!(config.core.guardrails.len(), 4);
         assert!(config.core.guardrails[0].contains("Fresh context"));
         assert!(config.core.guardrails[1].contains("search first"));
         assert!(config.core.guardrails[2].contains("Backpressure"));
+        assert!(config.core.guardrails[3].contains("Commit atomically"));
     }
 
     #[test]
@@ -1443,7 +1457,7 @@ core:
         assert_eq!(config.core.scratchpad, ".workspace/plan.md");
         assert_eq!(config.core.specs_dir, "./specifications/");
         // Guardrails should use defaults when not specified
-        assert_eq!(config.core.guardrails.len(), 3);
+        assert_eq!(config.core.guardrails.len(), 4);
     }
 
     #[test]
