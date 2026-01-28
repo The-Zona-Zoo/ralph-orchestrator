@@ -966,7 +966,7 @@ export const configRouter = router({
 /**
  * Preset type for the presets.list endpoint
  */
-interface Preset {
+export interface Preset {
   id: string;
   name: string;
   source: "builtin" | "directory" | "collection";
@@ -980,7 +980,7 @@ interface Preset {
  * @param source - Source type for the presets
  * @param includePath - Whether to include the file path in the preset
  */
-function readPresetsFromDir(
+export function readPresetsFromDir(
   dir: string,
   source: "builtin" | "directory",
   includePath: boolean
@@ -1017,14 +1017,14 @@ function readPresetsFromDir(
     });
 }
 
-// Path to builtin presets relative to this file
-const BUILTIN_PRESETS_DIR = path.resolve(__dirname, "../../../../crates/ralph-cli/presets");
+// Path to builtin presets - shared directory at repo root
+const BUILTIN_PRESETS_DIR = path.resolve(__dirname, "../../../../presets");
 
-function getBuiltinPresets(): Preset[] {
+export function getBuiltinPresets(): Preset[] {
   return readPresetsFromDir(BUILTIN_PRESETS_DIR, "builtin", false);
 }
 
-function getDirectoryPresets(): Preset[] {
+export function getDirectoryPresets(): Preset[] {
   const hatsDir = path.resolve(process.cwd(), ".ralph/hats");
   return readPresetsFromDir(hatsDir, "directory", true);
 }

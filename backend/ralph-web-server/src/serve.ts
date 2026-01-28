@@ -91,7 +91,7 @@ const taskRepository = new TaskRepository(db);
 const collectionRepository = new CollectionRepository(db);
 const collectionService = new CollectionService(collectionRepository);
 const configMerger = isTestMode ? undefined : new ConfigMerger({
-  presetsDir: path.resolve(REPO_ROOT, "crates/ralph-cli/presets"),
+  presetsDir: path.resolve(REPO_ROOT, "presets"),
   directoryPresetsRoot: CWD,
   collectionService,
   tempDir: path.join(CWD, ".ralph", "temp"),
@@ -117,6 +117,7 @@ const taskBridge = new TaskBridge(taskRepository, taskQueue, eventBus, {
 // This handles git merge conflicts when multiple worktree loops complete in parallel
 const loopsManager = new LoopsManager({
   processIntervalMs: loopsProcessIntervalMs,
+  workspaceRoot: CWD,
 });
 
 // Make LoopsManager available globally for potential API access
@@ -124,7 +125,7 @@ const loopsManager = new LoopsManager({
 
 // Create PlanningService for planning session management
 // Use REPO_ROOT for PlanningService because the planning preset (planning.yml)
-// is located at crates/ralph-cli/presets/ relative to the monorepo root,
+// is located at presets/ relative to the monorepo root,
 // not relative to the web server directory.
 const planningService = new PlanningService({
   workspaceRoot: REPO_ROOT,
@@ -195,6 +196,7 @@ startServer({ port: PORT, host: HOST, db, taskBridge, loopsManager, planningServ
     console.log(`Server started on http://${HOST}:${PORT}`);
     console.log(`Health check: http://${HOST}:${PORT}/health`);
     console.log(`TRPC endpoint: http://${HOST}:${PORT}/trpc`);
+    console.log(`REST API: http://${HOST}:${PORT}/api/v1`);
     console.log(`Dispatcher started (polling for tasks, maxConcurrent=${maxConcurrent})`);
     console.log(`LoopsManager active (processing every ${loopsProcessIntervalMs}ms)`);
     console.log(`TaskBridge active (DB tasks → execution queue)`);

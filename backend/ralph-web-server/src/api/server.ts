@@ -17,6 +17,7 @@ import { getDatabase } from "../db/connection";
 import { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import * as schema from "../db/schema";
 import { getLogBroadcaster } from "./LogBroadcaster";
+import { registerRestRoutes } from "./rest";
 import { TaskBridge } from "../services/TaskBridge";
 import { LoopsManager } from "../services/LoopsManager";
 import { PlanningService } from "../services/PlanningService";
@@ -112,6 +113,10 @@ export async function createServer(options: ServerOptions = {}): Promise<Fastify
       },
     } satisfies FastifyTRPCPluginOptions<AppRouter>["trpcOptions"],
   });
+
+  // Register REST API routes at /api/v1/*
+  const ctx = createContext(db, taskBridge, loopsManager, planningService);
+  await registerRestRoutes(server, ctx);
 
   return server;
 }

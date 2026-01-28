@@ -12,6 +12,9 @@ export type { ServerOptions } from "./server";
 export { appRouter, taskRouter, router, publicProcedure, createContext } from "./trpc";
 export type { AppRouter, Context } from "./trpc";
 
+// REST API exports
+export { registerRestRoutes } from "./rest";
+
 // WebSocket log streaming exports
 export {
   LogBroadcaster,
