@@ -266,7 +266,7 @@ export class ConfigMerger {
     }
 
     // Merge event_loop overrides (like starting_event from preset)
-    if (Object.keys(eventLoopOverrides).length > 0) {
+    if (eventLoopOverrides && Object.keys(eventLoopOverrides).length > 0) {
       merged.event_loop = {
         ...baseConfig.event_loop,
         ...eventLoopOverrides,

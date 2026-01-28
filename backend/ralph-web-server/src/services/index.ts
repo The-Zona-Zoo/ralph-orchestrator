@@ -44,3 +44,5 @@ export {
 } from "./PlanningService";
 
 export { CollectionService } from "./CollectionService";
+
+export { ConfigMerger, type MergeResult } from "./ConfigMerger";

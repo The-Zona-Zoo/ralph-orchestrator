@@ -40,17 +40,25 @@ export function TaskInput({
   className,
 }: TaskInputProps) {
   const [value, setValue] = useState("");
-  const [selectedPreset, setSelectedPreset] = useState<string | undefined>(undefined);
+  const [selectedPreset, setSelectedPreset] = useState<string | undefined>(() => {
+    // Restore session selection if available (resets on page refresh via sessionStorage)
+    return sessionStorage.getItem("ralph-preset-selection") ?? undefined;
+  });
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const utils = trpc.useUtils();
   const presetsQuery = trpc.presets.list.useQuery();
 
-  // Set default preset to first available once loaded
+  // Default to "default" (from config) when no session selection and data is loaded
   useEffect(() => {
-    if (presetsQuery.data && presetsQuery.data.length > 0 && !selectedPreset) {
-      setSelectedPreset(presetsQuery.data[0].id);
+    if (presetsQuery.data && !selectedPreset) {
+      setSelectedPreset("default");
     }
   }, [presetsQuery.data, selectedPreset]);
+
+  const handlePresetChange = (value: string) => {
+    setSelectedPreset(value);
+    sessionStorage.setItem("ralph-preset-selection", value);
+  };
 
   const createMutation = trpc.task.create.useMutation({
     onSuccess: (task) => {
@@ -110,14 +118,15 @@ export function TaskInput({
     <div className={cn("space-y-3", className)}>
       <select
         aria-label="Preset"
-        value={selectedPreset ?? ""}
-        onChange={(e) => setSelectedPreset(e.target.value)}
+        value={selectedPreset ?? "default"}
+        onChange={(e) => handlePresetChange(e.target.value)}
         disabled={presetsDisabled}
         className={cn(
           "w-full rounded-md border border-input bg-background px-3 py-2 text-sm",
           presetsDisabled && "opacity-50 cursor-not-allowed"
         )}
       >
+        <option value="default">Default (from config)</option>
         {presetsQuery.data?.map((preset) => (
           <option key={preset.id} value={preset.id}>
             {preset.name} ({preset.source})

@@ -12,7 +12,7 @@ import { TaskQueueService, EventBus, Dispatcher } from "./queue";
 import { PersistentTaskQueueService } from "./queue/PersistentTaskQueueService";
 import { createRalphTaskHandler } from "./runner/RalphTaskHandler";
 import { createTestLogTaskHandler } from "./runner/TestLogTaskHandler";
-import { TaskBridge, LoopsManager, PlanningService, CollectionService } from "./services";
+import { TaskBridge, LoopsManager, PlanningService, CollectionService, ConfigMerger } from "./services";
 import { TaskRepository, TaskLogRepository, QueuedTaskRepository, CollectionRepository } from "./repositories";
 import { ProcessSupervisor } from "./runner/ProcessSupervisor";
 import { FileOutputStreamer } from "./runner/FileOutputStreamer";
@@ -90,6 +90,12 @@ if (isTestMode) {
 const taskRepository = new TaskRepository(db);
 const collectionRepository = new CollectionRepository(db);
 const collectionService = new CollectionService(collectionRepository);
+const configMerger = isTestMode ? undefined : new ConfigMerger({
+  presetsDir: path.resolve(REPO_ROOT, "crates/ralph-cli/presets"),
+  directoryPresetsRoot: CWD,
+  collectionService,
+  tempDir: path.join(CWD, ".ralph", "temp"),
+});
 const processSupervisor = new ProcessSupervisor();
 const outputStreamer = new FileOutputStreamer();
 const taskBridge = new TaskBridge(taskRepository, taskQueue, eventBus, {
@@ -99,6 +105,7 @@ const taskBridge = new TaskBridge(taskRepository, taskQueue, eventBus, {
   outputStreamer,
   defaultConfigPath: isTestMode ? undefined : defaultConfigPath,
   collectionService,
+  configMerger,
 });
 
 // Make queue available globally for backward compatibility

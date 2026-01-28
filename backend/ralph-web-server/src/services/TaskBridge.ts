@@ -29,6 +29,7 @@ import { TaskRepository } from "../repositories";
 import { ProcessSupervisor } from "../runner/ProcessSupervisor";
 import { FileOutputStreamer } from "../runner/FileOutputStreamer";
 import { CollectionService } from "./CollectionService";
+import { ConfigMerger } from "./ConfigMerger";
 
 /**
  * Get the git repository root path from a given directory.
@@ -187,6 +188,8 @@ export interface TaskBridgeOptions {
   defaultConfigPath?: string;
   /** Collection service for exporting collection presets to YAML */
   collectionService?: CollectionService;
+  /** Config merger for combining base config with preset hats */
+  configMerger?: ConfigMerger;
 }
 
 /**
@@ -204,6 +207,7 @@ export class TaskBridge {
   private readonly outputStreamer?: FileOutputStreamer;
   private readonly defaultConfigPath?: string;
   private readonly collectionService?: CollectionService;
+  private readonly configMerger?: ConfigMerger;
 
   /** Map from queuedTaskId to dbTaskId for correlation */
   private readonly taskIdMap: Map<string, string> = new Map();
@@ -226,6 +230,7 @@ export class TaskBridge {
     this.outputStreamer = options.outputStreamer;
     this.defaultConfigPath = options.defaultConfigPath;
     this.collectionService = options.collectionService;
+    this.configMerger = options.configMerger;
 
     // Subscribe to execution lifecycle events
     this.subscribeToEvents();
@@ -409,51 +414,52 @@ export class TaskBridge {
       }
 
       // Build additional args for config/preset
-      // The config (-c) flag determines which hat collection is used.
-      // User-selected presets override the default config.
+      // When a ConfigMerger is available, merge the base config with the preset's hats,
+      // preserving base settings (max_iterations, backend, guardrails, etc.).
+      // Without ConfigMerger, fall back to the legacy behavior of replacing the entire config.
       const args: string[] = [];
-      let configResolved = false;
 
-      if (preset) {
-        // Preset format: "builtin:name" or "directory:name" or collection UUID
-        // - For builtin presets: Pass full ID "builtin:name" to ralph -c
-        // - For directory presets: Resolve to actual file path in .ralph/hats/<name>.yml
-        // - For collection presets (UUIDs): Export to temp file in .ralph/temp/
-        const builtinMatch = preset.match(/^builtin:(.+)$/);
-        const directoryMatch = preset.match(/^directory:(.+)$/);
+      if (this.configMerger && this.defaultConfigPath) {
+        // Merge base config with preset hats (or use base config as-is for "default")
+        const mergeResult = this.configMerger.merge(
+          this.defaultConfigPath,
+          preset ?? "default"
+        );
+        args.push("-c", mergeResult.tempPath);
+      } else {
+        // Legacy fallback: resolve preset to config path without merging
+        let configResolved = false;
 
-        if (builtinMatch) {
-          // Pass full builtin:name format - CLI will load from embedded presets
-          args.push("-c", preset);
-          configResolved = true;
-        } else if (directoryMatch) {
-          // Directory presets: resolve to actual file path in .ralph/hats/
-          const presetName = directoryMatch[1];
-          const presetPath = path.join(this.defaultCwd, ".ralph", "hats", `${presetName}.yml`);
-          args.push("-c", presetPath);
-          configResolved = true;
-        } else if (this.collectionService) {
-          // Collection presets (UUIDs): export to temp file and pass path
-          const yamlContent = this.collectionService.exportToYaml(preset);
-          if (yamlContent) {
-            // Ensure temp directory exists
-            const tempDir = path.join(this.defaultCwd, ".ralph", "temp");
-            if (!fs.existsSync(tempDir)) {
-              fs.mkdirSync(tempDir, { recursive: true });
-            }
+        if (preset) {
+          const builtinMatch = preset.match(/^builtin:(.+)$/);
+          const directoryMatch = preset.match(/^directory:(.+)$/);
 
-            // Write the collection config to a temp file
-            const tempPath = path.join(tempDir, `collection-${preset}.yml`);
-            fs.writeFileSync(tempPath, yamlContent, "utf-8");
-            args.push("-c", tempPath);
+          if (builtinMatch) {
+            args.push("-c", preset);
             configResolved = true;
+          } else if (directoryMatch) {
+            const presetName = directoryMatch[1];
+            const presetPath = path.join(this.defaultCwd, ".ralph", "hats", `${presetName}.yml`);
+            args.push("-c", presetPath);
+            configResolved = true;
+          } else if (this.collectionService) {
+            const yamlContent = this.collectionService.exportToYaml(preset);
+            if (yamlContent) {
+              const tempDir = path.join(this.defaultCwd, ".ralph", "temp");
+              if (!fs.existsSync(tempDir)) {
+                fs.mkdirSync(tempDir, { recursive: true });
+              }
+              const tempPath = path.join(tempDir, `collection-${preset}.yml`);
+              fs.writeFileSync(tempPath, yamlContent, "utf-8");
+              args.push("-c", tempPath);
+              configResolved = true;
+            }
           }
         }
-      }
 
-      // If no preset was resolved, use the default config
-      if (!configResolved && this.defaultConfigPath) {
-        args.push("-c", this.defaultConfigPath);
+        if (!configResolved && this.defaultConfigPath) {
+          args.push("-c", this.defaultConfigPath);
+        }
       }
 
       // Enqueue the task with the title as the prompt
