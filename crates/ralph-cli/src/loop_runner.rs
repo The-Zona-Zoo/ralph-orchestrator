@@ -116,6 +116,18 @@ pub async fn run_loop_impl(
             .context("Failed to write current-events marker file")?;
 
         debug!("Created events file for this run: {}", relative_events_path);
+
+        // Clear scratchpad for fresh objective start
+        // Stale content from previous runs can confuse the agent about current task state
+        let scratchpad_path = ctx.scratchpad_path();
+        if scratchpad_path.exists() {
+            fs::remove_file(&scratchpad_path)
+                .with_context(|| format!("Failed to clear scratchpad: {:?}", scratchpad_path))?;
+            debug!(
+                "Cleared scratchpad for fresh objective: {:?}",
+                scratchpad_path
+            );
+        }
     }
 
     // Initialize event loop with context for proper path resolution
