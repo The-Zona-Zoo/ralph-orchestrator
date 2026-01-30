@@ -401,8 +401,8 @@ Its content is auto-injected in `<scratchpad>` tags at the top of your context e
         ));
 
         // TASKS section removed — now injected via skills auto-injection pipeline
-        // (see EventLoop::inject_tasks_skill)
-        // TASK BREAKDOWN guidance moved into tasks-skill.md
+        // (see EventLoop::inject_memories_and_tools_skill)
+        // TASK BREAKDOWN guidance moved into ralph-tools.md
 
         // Add state management guidance
         prompt.push_str(&format!(

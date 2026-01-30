@@ -192,11 +192,12 @@ RObot:
 
 ### Event Types
 
-| Event | Direction | Purpose |
+| Event / Command | Direction | Purpose |
 |-------|-----------|---------|
 | `interact.human` | Agent to Human | Agent asks a question; loop blocks until response or timeout |
 | `human.response` | Human to Agent | Reply to an `interact.human` question |
 | `human.guidance` | Human to Agent | Proactive guidance injected as `## ROBOT GUIDANCE` in prompt |
+| `ralph tools interact progress` | Agent to Human | Non-blocking progress notification via Telegram (no event, direct send) |
 
 ### How It Works
 
@@ -235,3 +236,5 @@ ralph clean --diagnostics
 - Run python tests using a .venv
 - You MUST not commit ephemeral files
 - When I ask you to view something that means to use playwright/chrome tools to go view it.
+- When adding or changing `ralph tools` subcommands, update `crates/ralph-core/data/ralph-tools.md` — this is the single source of truth for the ralph-tools skill (`.claude/skills/ralph-tools/SKILL.md` is a symlink to it)
+- Design docs and specs go in `.ralph/specs` and one-off code tasks and bug fixes go in `.ralph/tasks`

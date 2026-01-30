@@ -827,25 +827,22 @@ impl EventLoop {
     /// Prepends auto-injected skill content to the prompt.
     ///
     /// This generalizes the former `prepend_memories()` into a skill auto-injection
-    /// pipeline that handles memories, tasks, and any other auto-inject skills.
+    /// pipeline that handles memories, tools, and any other auto-inject skills.
     ///
     /// Injection order:
-    /// 1. Memories skill (special case: loads memory data from store, applies budget)
-    /// 2. Tasks skill (gated by `tasks.enabled`)
+    /// 1. Memory data + ralph-tools skill (special case: loads memory data from store, applies budget)
+    /// 2. RObot interaction skill (gated by `robot.enabled`)
     /// 3. Other auto-inject skills from the registry (wrapped in XML tags)
     fn prepend_auto_inject_skills(&self, prompt: String) -> String {
         let mut prefix = String::new();
 
-        // 1. Memories skill — special case with data loading
-        self.inject_memories_skill(&mut prefix);
+        // 1. Memory data + ralph-tools skill — special case with data loading
+        self.inject_memories_and_tools_skill(&mut prefix);
 
-        // 2. Tasks skill — gated by tasks.enabled
-        self.inject_tasks_skill(&mut prefix);
-
-        // 3. RObot interaction skill — gated by robot.enabled
+        // 2. RObot interaction skill — gated by robot.enabled
         self.inject_robot_skill(&mut prefix);
 
-        // 4. Other auto-inject skills from the registry
+        // 3. Other auto-inject skills from the registry
         self.inject_custom_auto_skills(&mut prefix);
 
         if prefix.is_empty() {
@@ -857,107 +854,88 @@ impl EventLoop {
         prefix
     }
 
-    /// Injects memories content and skill into the prefix.
+    /// Injects memory data and the ralph-tools skill into the prefix.
     ///
     /// Special case: loads memory entries from the store, applies budget
-    /// truncation, then appends the memories skill content.
-    /// Gated by `memories.enabled && memories.inject == Auto`.
-    fn inject_memories_skill(&self, prefix: &mut String) {
+    /// truncation, then appends the ralph-tools skill content (which covers
+    /// both tasks and memories CLI usage).
+    /// Memory data is gated by `memories.enabled && memories.inject == Auto`.
+    /// The ralph-tools skill is injected when either memories or tasks are enabled.
+    fn inject_memories_and_tools_skill(&self, prefix: &mut String) {
         let memories_config = &self.config.memories;
 
-        info!(
-            "Memory injection check: enabled={}, inject={:?}, workspace_root={:?}",
-            memories_config.enabled, memories_config.inject, self.config.core.workspace_root
-        );
-
-        if !memories_config.enabled || memories_config.inject != InjectMode::Auto {
+        // Inject memory DATA if memories are enabled with auto-inject
+        if memories_config.enabled && memories_config.inject == InjectMode::Auto {
             info!(
-                "Memory injection skipped: enabled={}, inject={:?}",
-                memories_config.enabled, memories_config.inject
+                "Memory injection check: enabled={}, inject={:?}, workspace_root={:?}",
+                memories_config.enabled, memories_config.inject, self.config.core.workspace_root
             );
-            return;
-        }
 
-        let workspace_root = &self.config.core.workspace_root;
-        let store = MarkdownMemoryStore::with_default_path(workspace_root);
-        let memories_path = workspace_root.join(".ralph/agent/memories.md");
+            let workspace_root = &self.config.core.workspace_root;
+            let store = MarkdownMemoryStore::with_default_path(workspace_root);
+            let memories_path = workspace_root.join(".ralph/agent/memories.md");
 
-        info!(
-            "Looking for memories at: {:?} (exists: {})",
-            memories_path,
-            memories_path.exists()
-        );
+            info!(
+                "Looking for memories at: {:?} (exists: {})",
+                memories_path,
+                memories_path.exists()
+            );
 
-        let memories = match store.load() {
-            Ok(memories) => {
-                info!("Successfully loaded {} memories from store", memories.len());
-                memories
-            }
-            Err(e) => {
+            let memories = match store.load() {
+                Ok(memories) => {
+                    info!("Successfully loaded {} memories from store", memories.len());
+                    memories
+                }
+                Err(e) => {
+                    info!(
+                        "Failed to load memories for injection: {} (path: {:?})",
+                        e, memories_path
+                    );
+                    Vec::new()
+                }
+            };
+
+            if memories.is_empty() {
+                info!("Memory store is empty - no memories to inject");
+            } else {
+                let mut memories_content = format_memories_as_markdown(&memories);
+
+                if memories_config.budget > 0 {
+                    let original_len = memories_content.len();
+                    memories_content =
+                        truncate_to_budget(&memories_content, memories_config.budget);
+                    debug!(
+                        "Applied budget: {} chars -> {} chars (budget: {})",
+                        original_len,
+                        memories_content.len(),
+                        memories_config.budget
+                    );
+                }
+
                 info!(
-                    "Failed to load memories for injection: {} (path: {:?})",
-                    e, memories_path
+                    "Injecting {} memories ({} chars) into prompt",
+                    memories.len(),
+                    memories_content.len()
                 );
-                return;
+
+                prefix.push_str(&memories_content);
             }
-        };
-
-        if memories.is_empty() {
-            info!("Memory store is empty - no memories to inject");
-            return;
         }
 
-        let mut memories_content = format_memories_as_markdown(&memories);
-
-        if memories_config.budget > 0 {
-            let original_len = memories_content.len();
-            memories_content = truncate_to_budget(&memories_content, memories_config.budget);
-            debug!(
-                "Applied budget: {} chars -> {} chars (budget: {})",
-                original_len,
-                memories_content.len(),
-                memories_config.budget
-            );
-        }
-
-        info!(
-            "Injecting {} memories ({} chars) into prompt",
-            memories.len(),
-            memories_content.len()
-        );
-
-        prefix.push_str(&memories_content);
-
-        // Append the memories usage skill content
-        if let Some(skill) = self.skill_registry.get("ralph-memories") {
-            prefix.push_str(&skill.content);
-            debug!("Added memories skill from registry");
-        } else {
-            debug!("Memories skill not found in registry - skill content not injected");
-        }
-    }
-
-    /// Injects the tasks skill content into the prefix.
-    ///
-    /// Gated by `tasks.enabled`. The tasks skill provides CLI instructions
-    /// for runtime work tracking.
-    fn inject_tasks_skill(&self, prefix: &mut String) {
-        if !self.config.tasks.enabled {
-            debug!("Tasks injection skipped: tasks.enabled=false");
-            return;
-        }
-
-        if let Some(skill) = self.skill_registry.get("tasks") {
-            if !prefix.is_empty() {
-                prefix.push_str("\n\n");
+        // Inject the ralph-tools skill when either memories or tasks are enabled
+        if memories_config.enabled || self.config.tasks.enabled {
+            if let Some(skill) = self.skill_registry.get("ralph-tools") {
+                if !prefix.is_empty() {
+                    prefix.push_str("\n\n");
+                }
+                prefix.push_str(&format!(
+                    "<ralph-tools-skill>\n{}\n</ralph-tools-skill>",
+                    skill.content.trim()
+                ));
+                debug!("Injected ralph-tools skill from registry");
+            } else {
+                debug!("ralph-tools skill not found in registry - skill content not injected");
             }
-            prefix.push_str(&format!(
-                "<tasks-skill>\n{}\n</tasks-skill>",
-                skill.content.trim()
-            ));
-            debug!("Injected tasks skill from registry");
-        } else {
-            debug!("Tasks skill not found in registry - tasks content not injected");
         }
     }
 
@@ -982,14 +960,11 @@ impl EventLoop {
         }
     }
 
-    /// Injects any user-configured auto-inject skills (excluding built-in memories/tasks/robot-interaction).
+    /// Injects any user-configured auto-inject skills (excluding built-in ralph-tools/robot-interaction).
     fn inject_custom_auto_skills(&self, prefix: &mut String) {
         for skill in self.skill_registry.auto_inject_skills(None) {
             // Skip built-in skills handled above
-            if skill.name == "ralph-memories"
-                || skill.name == "tasks"
-                || skill.name == "robot-interaction"
-            {
+            if skill.name == "ralph-tools" || skill.name == "robot-interaction" {
                 continue;
             }
 
