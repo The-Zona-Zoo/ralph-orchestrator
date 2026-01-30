@@ -1505,44 +1505,58 @@ impl EventLoop {
                     "ask.human event detected — sending question via Telegram"
                 );
 
-                // Send the question
-                match telegram_service.send_question(&payload) {
-                    Ok(_message_id) => {
-                        // Block: poll events file for human.response
-                        let events_path = self
-                            .loop_context
-                            .as_ref()
-                            .map(|ctx| ctx.events_path())
-                            .unwrap_or_else(|| PathBuf::from(".ralph/events.jsonl"));
-
-                        match telegram_service.wait_for_response(&events_path) {
-                            Ok(Some(response)) => {
-                                info!(
-                                    response = %response,
-                                    "Received human.response — continuing loop"
-                                );
-                                // Create a human.response event to inject into the bus
-                                response_event = Some(Event::new("human.response", &response));
-                            }
-                            Ok(None) => {
-                                warn!(
-                                    timeout_secs = telegram_service.timeout_secs(),
-                                    "Human response timeout — continuing without response"
-                                );
-                            }
-                            Err(e) => {
-                                warn!(
-                                    error = %e,
-                                    "Error waiting for human response — continuing without response"
-                                );
-                            }
-                        }
-                    }
+                // Send the question (includes retry with exponential backoff)
+                let send_ok = match telegram_service.send_question(&payload) {
+                    Ok(_message_id) => true,
                     Err(e) => {
                         warn!(
                             error = %e,
-                            "Failed to send ask.human question — continuing without blocking"
+                            "Failed to send ask.human question after retries — treating as timeout"
                         );
+                        // Log to diagnostics
+                        self.diagnostics.log_error(
+                            self.state.iteration,
+                            "telegram",
+                            crate::diagnostics::DiagnosticError::TelegramSendError {
+                                operation: "send_question".to_string(),
+                                error: e.to_string(),
+                                retry_count: ralph_telegram::MAX_SEND_RETRIES,
+                            },
+                        );
+                        false
+                    }
+                };
+
+                // Block: poll events file for human.response
+                // Per spec, even on send failure we treat as timeout (continue without blocking)
+                if send_ok {
+                    let events_path = self
+                        .loop_context
+                        .as_ref()
+                        .map(|ctx| ctx.events_path())
+                        .unwrap_or_else(|| PathBuf::from(".ralph/events.jsonl"));
+
+                    match telegram_service.wait_for_response(&events_path) {
+                        Ok(Some(response)) => {
+                            info!(
+                                response = %response,
+                                "Received human.response — continuing loop"
+                            );
+                            // Create a human.response event to inject into the bus
+                            response_event = Some(Event::new("human.response", &response));
+                        }
+                        Ok(None) => {
+                            warn!(
+                                timeout_secs = telegram_service.timeout_secs(),
+                                "Human response timeout — continuing without response"
+                            );
+                        }
+                        Err(e) => {
+                            warn!(
+                                error = %e,
+                                "Error waiting for human response — continuing without response"
+                            );
+                        }
                     }
                 }
             } else {

@@ -1,0 +1,28 @@
+//! # ralph-telegram
+//!
+//! Telegram integration for human-in-the-loop orchestration in Ralph.
+//!
+//! This crate provides bidirectional communication between AI agents and humans
+//! during orchestration loops via Telegram:
+//!
+//! - **AI → Human**: Agents emit `interact.human` events; the bot sends questions to Telegram
+//! - **Human → AI**: Humans reply or send proactive guidance via Telegram messages
+//!
+//! ## Key Components
+//!
+//! - [`StateManager`] — Persists chat ID, pending questions, and reply routing
+//! - [`MessageHandler`] — Processes incoming messages and writes events to JSONL
+//! - [`TelegramService`] — Lifecycle management for the bot within the event loop
+//! - [`error`] — Error types for startup, send, and receive failures
+
+mod bot;
+mod error;
+mod handler;
+mod service;
+mod state;
+
+pub use bot::{BotApi, TelegramBot, escape_html};
+pub use error::{TelegramError, TelegramResult};
+pub use handler::MessageHandler;
+pub use service::{BASE_RETRY_DELAY, MAX_SEND_RETRIES, TelegramService, retry_with_backoff};
+pub use state::{PendingQuestion, StateManager, TelegramState};

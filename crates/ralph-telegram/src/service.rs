@@ -1,16 +1,70 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use tracing::{debug, info, warn};
 
+use crate::bot::TelegramBot;
 use crate::error::{TelegramError, TelegramResult};
 use crate::handler::MessageHandler;
 use crate::state::StateManager;
 
+/// Maximum number of retry attempts for sending messages.
+pub const MAX_SEND_RETRIES: u32 = 3;
+
+/// Base delay for exponential backoff (1 second).
+pub const BASE_RETRY_DELAY: Duration = Duration::from_secs(1);
+
+/// Execute a fallible send operation with exponential backoff retry.
+///
+/// Retries up to [`MAX_SEND_RETRIES`] times with delays of 1s, 2s, 4s.
+/// Returns the result on success, or `TelegramError::Send` after all
+/// retries are exhausted.
+///
+/// The `sleep_fn` parameter allows tests to substitute a no-op sleep.
+pub fn retry_with_backoff<F, S>(mut send_fn: F, mut sleep_fn: S) -> TelegramResult<i32>
+where
+    F: FnMut(u32) -> TelegramResult<i32>,
+    S: FnMut(Duration),
+{
+    let mut last_error = String::new();
+
+    for attempt in 1..=MAX_SEND_RETRIES {
+        match send_fn(attempt) {
+            Ok(msg_id) => return Ok(msg_id),
+            Err(e) => {
+                last_error = e.to_string();
+                warn!(
+                    attempt = attempt,
+                    max_retries = MAX_SEND_RETRIES,
+                    error = %last_error,
+                    "Telegram send failed, {}",
+                    if attempt < MAX_SEND_RETRIES {
+                        "retrying with backoff"
+                    } else {
+                        "all retries exhausted"
+                    }
+                );
+                if attempt < MAX_SEND_RETRIES {
+                    let delay = BASE_RETRY_DELAY * 2u32.pow(attempt - 1);
+                    sleep_fn(delay);
+                }
+            }
+        }
+    }
+
+    Err(TelegramError::Send {
+        attempts: MAX_SEND_RETRIES,
+        reason: last_error,
+    })
+}
+
 /// Coordinates the Telegram bot lifecycle with the Ralph event loop.
 ///
 /// Manages startup, shutdown, message sending, and response waiting.
+/// Uses the host tokio runtime (from `#[tokio::main]`) for async operations.
 pub struct TelegramService {
     workspace_root: PathBuf,
     bot_token: String,
@@ -18,6 +72,8 @@ pub struct TelegramService {
     loop_id: String,
     state_manager: StateManager,
     handler: MessageHandler,
+    bot: TelegramBot,
+    shutdown: Arc<AtomicBool>,
 }
 
 impl TelegramService {
@@ -38,6 +94,8 @@ impl TelegramService {
         let state_manager = StateManager::new(&state_path);
         let handler_state_manager = StateManager::new(&state_path);
         let handler = MessageHandler::new(handler_state_manager, &workspace_root);
+        let bot = TelegramBot::new(&resolved_token);
+        let shutdown = Arc::new(AtomicBool::new(false));
 
         Ok(Self {
             workspace_root,
@@ -46,6 +104,8 @@ impl TelegramService {
             loop_id,
             state_manager,
             handler,
+            bot,
+            shutdown,
         })
     }
 
@@ -89,22 +149,171 @@ impl TelegramService {
 
     /// Start the Telegram service.
     ///
-    /// Initializes the bot connection and prepares to send/receive messages.
-    /// This must be called before sending questions or waiting for responses.
+    /// Spawns a background polling task on the host tokio runtime to receive
+    /// incoming messages. Must be called from within a tokio runtime context.
     pub fn start(&self) -> TelegramResult<()> {
         info!(
             bot_token = %self.bot_token_masked(),
             workspace = %self.workspace_root.display(),
             timeout_secs = self.timeout_secs,
-            "Telegram service started"
+            "Telegram service starting"
         );
+
+        // Spawn the polling task on the host tokio runtime
+        let handle = tokio::runtime::Handle::try_current().map_err(|_| {
+            TelegramError::Startup("no tokio runtime available for polling".to_string())
+        })?;
+
+        let raw_bot = teloxide::Bot::new(&self.bot_token);
+        let workspace_root = self.workspace_root.clone();
+        let state_path = self.workspace_root.join(".ralph/telegram-state.json");
+        let shutdown = self.shutdown.clone();
+        let loop_id = self.loop_id.clone();
+
+        handle.spawn(async move {
+            Self::poll_updates(raw_bot, workspace_root, state_path, shutdown, loop_id).await;
+        });
+
+        // Send greeting if we already know the chat ID
+        if let Ok(state) = self.state_manager.load_or_default()
+            && let Some(chat_id) = state.chat_id
+        {
+            let greeting = crate::bot::TelegramBot::format_greeting(&self.loop_id);
+            match self.send_with_retry(chat_id, &greeting) {
+                Ok(_) => info!("Sent greeting to chat {}", chat_id),
+                Err(e) => warn!(error = %e, "Failed to send greeting"),
+            }
+        }
+
+        info!("Telegram service started — polling for incoming messages");
         Ok(())
+    }
+
+    /// Background polling task that receives incoming Telegram messages.
+    ///
+    /// Uses long polling (`getUpdates`) to receive messages, then routes them
+    /// through `MessageHandler` to write events to the correct loop's JSONL.
+    async fn poll_updates(
+        bot: teloxide::Bot,
+        workspace_root: PathBuf,
+        state_path: PathBuf,
+        shutdown: Arc<AtomicBool>,
+        loop_id: String,
+    ) {
+        use teloxide::payloads::{GetUpdatesSetters, SetMessageReactionSetters};
+        use teloxide::requests::Requester;
+
+        let state_manager = StateManager::new(&state_path);
+        let handler_state_manager = StateManager::new(&state_path);
+        let handler = MessageHandler::new(handler_state_manager, &workspace_root);
+        let mut offset: i32 = 0;
+
+        info!(loop_id = %loop_id, "Telegram polling task started");
+
+        while !shutdown.load(Ordering::Relaxed) {
+            let request = bot.get_updates().offset(offset).timeout(10);
+            match request.await {
+                Ok(updates) => {
+                    for update in updates {
+                        // Next offset = current update ID + 1
+                        #[allow(clippy::cast_possible_wrap)]
+                        {
+                            offset = update.id.0 as i32 + 1;
+                        }
+
+                        // Extract message from update kind
+                        let msg = match update.kind {
+                            teloxide::types::UpdateKind::Message(msg) => msg,
+                            _ => continue,
+                        };
+
+                        let text = match msg.text() {
+                            Some(t) => t,
+                            None => continue,
+                        };
+
+                        let chat_id = msg.chat.id.0;
+                        let reply_to: Option<i32> = msg.reply_to_message().map(|r| r.id.0);
+
+                        let mut state = match state_manager.load_or_default() {
+                            Ok(s) => s,
+                            Err(e) => {
+                                warn!(error = %e, "Failed to load Telegram state");
+                                continue;
+                            }
+                        };
+
+                        info!(
+                            chat_id = chat_id,
+                            text = %text,
+                            "Received Telegram message"
+                        );
+
+                        match handler.handle_message(&mut state, text, chat_id, reply_to) {
+                            Ok(topic) => {
+                                let emoji = if topic == "human.response" {
+                                    "👍"
+                                } else {
+                                    "👀"
+                                };
+                                let react_result = bot
+                                    .set_message_reaction(teloxide::types::ChatId(chat_id), msg.id)
+                                    .reaction(vec![teloxide::types::ReactionType::Emoji {
+                                        emoji: emoji.to_string(),
+                                    }])
+                                    .await;
+                                if let Err(e) = react_result {
+                                    warn!(error = %e, "Failed to react to message");
+                                }
+
+                                // For guidance, also send a short text reply
+                                if topic == "human.guidance" {
+                                    let _ = bot
+                                        .send_message(
+                                            teloxide::types::ChatId(chat_id),
+                                            "Working on something, but I'll get to it.",
+                                        )
+                                        .await;
+                                }
+                            }
+                            Err(e) => {
+                                warn!(
+                                    error = %e,
+                                    text = %text,
+                                    "Failed to handle incoming Telegram message"
+                                );
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    if !shutdown.load(Ordering::Relaxed) {
+                        warn!(error = %e, "Telegram polling error — retrying in 5s");
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                    }
+                }
+            }
+        }
+
+        info!(loop_id = %loop_id, "Telegram polling task stopped");
     }
 
     /// Stop the Telegram service gracefully.
     ///
-    /// Shuts down the bot connection and cleans up resources.
-    pub fn stop(&self) {
+    /// Signals the background polling task to shut down.
+    pub fn stop(self) {
+        // Send farewell if we know the chat ID
+        if let Ok(state) = self.state_manager.load_or_default()
+            && let Some(chat_id) = state.chat_id
+        {
+            let farewell = crate::bot::TelegramBot::format_farewell(&self.loop_id);
+            match self.send_with_retry(chat_id, &farewell) {
+                Ok(_) => info!("Sent farewell to chat {}", chat_id),
+                Err(e) => warn!(error = %e, "Failed to send farewell"),
+            }
+        }
+
+        self.shutdown.store(true, Ordering::Relaxed);
         info!(
             workspace = %self.workspace_root.display(),
             "Telegram service stopped"
@@ -113,28 +322,22 @@ impl TelegramService {
 
     /// Send a question to the human via Telegram and store it as a pending question.
     ///
-    /// The question payload is extracted from the `ask.human` event. A pending
+    /// The question payload is extracted from the `interact.human` event. A pending
     /// question is stored in the state manager so that incoming replies can be
     /// routed back to the correct loop.
     ///
+    /// On send failure, retries up to 3 times with exponential backoff (1s, 2s, 4s).
     /// Returns the message ID of the sent Telegram message, or 0 if no chat ID
     /// is configured (question is logged but not sent).
     pub fn send_question(&self, payload: &str) -> TelegramResult<i32> {
         let mut state = self.state_manager.load_or_default()?;
 
-        let message_id = if let Some(_chat_id) = state.chat_id {
-            // TODO: actual Telegram bot send via BotApi when real bot is integrated
-            // For now, log the question. The message_id is a placeholder.
-            info!(
-                loop_id = %self.loop_id,
-                "ask.human question sent: {}",
-                payload
-            );
-            0
+        let message_id = if let Some(chat_id) = state.chat_id {
+            self.send_with_retry(chat_id, payload)?
         } else {
             warn!(
                 loop_id = %self.loop_id,
-                "No chat ID configured — ask.human question logged but not sent: {}",
+                "No chat ID configured — interact.human question logged but not sent: {}",
                 payload
             );
             0
@@ -152,6 +355,28 @@ impl TelegramService {
         Ok(message_id)
     }
 
+    /// Attempt to send a message with exponential backoff retries.
+    ///
+    /// Uses the host tokio runtime via `block_in_place` + `Handle::block_on`
+    /// to bridge the sync event loop to the async BotApi.
+    fn send_with_retry(&self, chat_id: i64, payload: &str) -> TelegramResult<i32> {
+        use crate::bot::BotApi;
+
+        let handle = tokio::runtime::Handle::try_current().map_err(|_| TelegramError::Send {
+            attempts: 0,
+            reason: "no tokio runtime available for sending".to_string(),
+        })?;
+
+        retry_with_backoff(
+            |_attempt| {
+                tokio::task::block_in_place(|| {
+                    handle.block_on(self.bot.send_message(chat_id, payload))
+                })
+            },
+            |delay| std::thread::sleep(delay),
+        )
+    }
+
     /// Poll the events file for a `human.response` event, blocking until one
     /// arrives or the configured timeout expires.
     ///
@@ -161,7 +386,7 @@ impl TelegramService {
     /// and returns `None`.
     pub fn wait_for_response(&self, events_path: &Path) -> TelegramResult<Option<String>> {
         let timeout = Duration::from_secs(self.timeout_secs);
-        let poll_interval = Duration::from_secs(1);
+        let poll_interval = Duration::from_millis(250);
         let deadline = Instant::now() + timeout;
 
         // Track file position to only read new lines
@@ -380,7 +605,7 @@ mod tests {
         let service = test_service(&dir);
 
         let msg_id = service.send_question("async or sync?").unwrap();
-        // Without a real bot, message_id is 0
+        // Without a chat_id in state, message_id is 0
         assert_eq!(msg_id, 0);
     }
 
@@ -578,5 +803,153 @@ mod tests {
             !state.pending_questions.contains_key("main"),
             "pending question should be removed on timeout"
         );
+    }
+
+    #[test]
+    fn retry_with_backoff_succeeds_on_first_attempt() {
+        let attempts = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let attempts_clone = attempts.clone();
+
+        let result = retry_with_backoff(
+            |attempt| {
+                attempts_clone.lock().unwrap().push(attempt);
+                Ok(42)
+            },
+            |_delay| {},
+        );
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 42);
+        assert_eq!(*attempts.lock().unwrap(), vec![1]);
+    }
+
+    #[test]
+    fn retry_with_backoff_succeeds_on_second_attempt() {
+        let attempts = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let attempts_clone = attempts.clone();
+        let delays = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let delays_clone = delays.clone();
+
+        let result = retry_with_backoff(
+            |attempt| {
+                attempts_clone.lock().unwrap().push(attempt);
+                if attempt < 2 {
+                    Err(TelegramError::Send {
+                        attempts: attempt,
+                        reason: "transient failure".to_string(),
+                    })
+                } else {
+                    Ok(99)
+                }
+            },
+            |delay| {
+                delays_clone.lock().unwrap().push(delay);
+            },
+        );
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 99);
+        assert_eq!(*attempts.lock().unwrap(), vec![1, 2]);
+        // First retry delay: 1s * 2^0 = 1s
+        assert_eq!(*delays.lock().unwrap(), vec![Duration::from_secs(1)]);
+    }
+
+    #[test]
+    fn retry_with_backoff_succeeds_on_third_attempt() {
+        let attempts = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let attempts_clone = attempts.clone();
+        let delays = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let delays_clone = delays.clone();
+
+        let result = retry_with_backoff(
+            |attempt| {
+                attempts_clone.lock().unwrap().push(attempt);
+                if attempt < 3 {
+                    Err(TelegramError::Send {
+                        attempts: attempt,
+                        reason: "transient failure".to_string(),
+                    })
+                } else {
+                    Ok(7)
+                }
+            },
+            |delay| {
+                delays_clone.lock().unwrap().push(delay);
+            },
+        );
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 7);
+        assert_eq!(*attempts.lock().unwrap(), vec![1, 2, 3]);
+        // Delays: 1s * 2^0 = 1s, 1s * 2^1 = 2s
+        assert_eq!(
+            *delays.lock().unwrap(),
+            vec![Duration::from_secs(1), Duration::from_secs(2)]
+        );
+    }
+
+    #[test]
+    fn retry_with_backoff_fails_after_all_retries() {
+        let attempts = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let attempts_clone = attempts.clone();
+        let delays = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let delays_clone = delays.clone();
+
+        let result = retry_with_backoff(
+            |attempt| {
+                attempts_clone.lock().unwrap().push(attempt);
+                Err(TelegramError::Send {
+                    attempts: attempt,
+                    reason: format!("failure on attempt {}", attempt),
+                })
+            },
+            |delay| {
+                delays_clone.lock().unwrap().push(delay);
+            },
+        );
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(
+            err,
+            TelegramError::Send {
+                attempts: 3,
+                reason: _
+            }
+        ));
+        // Should report the last error message
+        if let TelegramError::Send { reason, .. } = &err {
+            assert!(reason.contains("failure on attempt 3"));
+        }
+        assert_eq!(*attempts.lock().unwrap(), vec![1, 2, 3]);
+        // Delays: 1s, 2s (no delay after final attempt)
+        assert_eq!(
+            *delays.lock().unwrap(),
+            vec![Duration::from_secs(1), Duration::from_secs(2)]
+        );
+    }
+
+    #[test]
+    fn retry_with_backoff_exponential_delays_are_correct() {
+        let delays = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let delays_clone = delays.clone();
+
+        let _ = retry_with_backoff(
+            |_attempt| {
+                Err(TelegramError::Send {
+                    attempts: 1,
+                    reason: "always fail".to_string(),
+                })
+            },
+            |delay| {
+                delays_clone.lock().unwrap().push(delay);
+            },
+        );
+
+        let recorded = delays.lock().unwrap().clone();
+        // Backoff: 1s * 2^0 = 1s, 1s * 2^1 = 2s (no sleep after 3rd attempt)
+        assert_eq!(recorded.len(), 2);
+        assert_eq!(recorded[0], Duration::from_secs(1));
+        assert_eq!(recorded[1], Duration::from_secs(2));
     }
 }

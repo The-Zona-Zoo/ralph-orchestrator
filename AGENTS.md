@@ -34,6 +34,7 @@ npm run test:server                          # Backend tests
 ralph-cli      → CLI entry point, commands (run, plan, task, loops, web)
 ralph-core     → Orchestration logic, event loop, hats, memories, tasks
 ralph-adapters → Backend integrations (Claude, Kiro, Gemini, Codex, etc.)
+ralph-telegram → Telegram bot for human-in-the-loop communication
 ralph-tui      → Terminal UI (ratatui-based)
 ralph-e2e      → End-to-end test framework
 ralph-proto    → Protocol definitions
@@ -52,6 +53,7 @@ frontend/      → Web dashboard (@ralph-web/dashboard) - React + Vite + Tailwin
 | `.ralph/loop.lock` | Contains PID + prompt of primary loop |
 | `.ralph/loops.json` | Registry of all tracked loops |
 | `.ralph/merge-queue.jsonl` | Event-sourced merge queue |
+| `.ralph/telegram-state.json` | Telegram bot state (chat ID, pending questions) |
 
 ### Code Locations
 
@@ -63,6 +65,8 @@ frontend/      → Web dashboard (@ralph-web/dashboard) - React + Vite + Tailwin
 - **Loop registry**: `crates/ralph-core/src/loop_registry.rs`
 - **Merge queue**: `crates/ralph-core/src/merge_queue.rs`
 - **CLI commands**: `crates/ralph-cli/src/loops.rs`, `task_cli.rs`
+- **Telegram integration**: `crates/ralph-telegram/src/` (bot, service, state, handler)
+- **Human config**: `crates/ralph-core/src/config.rs` (`HumanConfig`, `TelegramBotConfig`)
 - **Web server**: `backend/ralph-web-server/src/` (tRPC routes in `api/`, runners in `runner/`)
 - **Web dashboard**: `frontend/ralph-web/src/` (React components in `components/`)
 
@@ -170,6 +174,40 @@ cargo run -p ralph-e2e -- --list             # List scenarios
 ```
 
 Reports generated in `.e2e-tests/`.
+
+## Human-in-the-Loop
+
+Ralph supports human interaction during orchestration via Telegram. Agents can ask questions and humans can send proactive guidance.
+
+### Configuration
+
+```yaml
+# ralph.yml
+human:
+  enabled: true
+  timeout_seconds: 300    # How long to block waiting for a response
+  telegram:
+    bot_token: "your-token"  # Or set RALPH_TELEGRAM_BOT_TOKEN env var
+```
+
+### Event Types
+
+| Event | Direction | Purpose |
+|-------|-----------|---------|
+| `ask.human` | Agent to Human | Agent asks a question; loop blocks until response or timeout |
+| `human.response` | Human to Agent | Reply to an `ask.human` question |
+| `human.guidance` | Human to Agent | Proactive guidance injected as `## HUMAN GUIDANCE` in prompt |
+
+### How It Works
+
+- The Telegram bot starts only on the **primary loop** (the one holding `.ralph/loop.lock`)
+- When an agent emits `ask.human`, the event loop sends the question via Telegram and **blocks**
+- Responses are published as `human.response` events on the bus
+- Proactive messages become `human.guidance` events, squashed into a numbered list in the prompt
+- Send failures retry with exponential backoff (3 attempts); if all fail, treated as timeout
+- Parallel loops route messages via reply-to, `@loop-id` prefix, or default to primary
+
+See `crates/ralph-telegram/README.md` for setup instructions.
 
 ## Diagnostics
 

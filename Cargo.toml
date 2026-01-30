@@ -8,6 +8,7 @@ members = [
     "crates/ralph-cli",
     "crates/ralph-bench",
     "crates/ralph-e2e",
+    "crates/ralph-telegram",
 ]
 exclude = [
     ".eval-sandbox",  # Evaluation sandbox - should never be in workspace
@@ -136,6 +137,10 @@ ralph-tui = { version = "2.3.1", path = "crates/ralph-tui" }
 ralph-cli = { version = "2.3.1", path = "crates/ralph-cli" }
 ralph-bench = { version = "2.3.1", path = "crates/ralph-bench" }
 ralph-e2e = { version = "2.3.1", path = "crates/ralph-e2e" }
+ralph-telegram = { version = "2.3.1", path = "crates/ralph-telegram" }
+
+# Telegram bot framework
+teloxide = { version = "0.13", features = ["macros"] }
 
 # Config for 'dist'
 [workspace.metadata.dist]
