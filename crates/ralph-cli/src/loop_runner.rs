@@ -1557,6 +1557,96 @@ pub fn process_pending_merges_cli(repo_root: &Path) {
     process_pending_merges(repo_root);
 }
 
+/// Start a loop from an external caller (e.g., the bot daemon).
+///
+/// Loads config from `ralph.yml`, applies the given prompt, acquires the
+/// loop lock, and runs the orchestration loop headlessly. The caller is
+/// responsible for Telegram interaction — the spawned loop has `robot.enabled`
+/// disabled to prevent a second Telegram poller from conflicting.
+///
+/// Returns `Ok(TerminationReason)` on completion or `Err` on fatal errors.
+pub async fn start_loop(
+    prompt: String,
+    workspace_root: PathBuf,
+    config_path: Option<PathBuf>,
+) -> Result<TerminationReason> {
+    use crate::{ColorMode, ConfigSource, load_config_with_overrides};
+
+    // Load config from file or defaults
+    let config_source = config_path.unwrap_or_else(|| workspace_root.join("ralph.yml"));
+    let sources = vec![ConfigSource::File(config_source)];
+    let mut config = load_config_with_overrides(&sources)?;
+
+    // Set workspace root to the provided path
+    config.core.workspace_root = workspace_root.clone();
+
+    // Apply the prompt
+    config.event_loop.prompt = Some(prompt);
+    config.event_loop.prompt_file = String::new();
+
+    // Keep robot.enabled as-is from config. When the daemon starts a loop,
+    // the loop's own TelegramService handles all Telegram interaction
+    // (commands, guidance, responses, check-ins). The daemon stops polling
+    // while the loop runs, so there's no conflict.
+
+    // Force autonomous headless mode (no TUI, no interactive)
+    config.cli.default_mode = "autonomous".to_string();
+
+    // Normalize and validate
+    config.normalize();
+    let warnings = config
+        .validate()
+        .context("Configuration validation failed")?;
+    for warning in &warnings {
+        tracing::warn!("{}", warning);
+    }
+
+    // Auto-detect backend if needed
+    if config.cli.backend == "auto" {
+        let priority = config.get_agent_priority();
+        let detected = ralph_adapters::detect_backend(&priority, |backend| {
+            config.adapter_settings(backend).enabled
+        });
+        match detected {
+            Ok(backend) => {
+                info!("Auto-detected backend: {}", backend);
+                config.cli.backend = backend;
+            }
+            Err(e) => return Err(anyhow::Error::new(e)),
+        }
+    }
+
+    // Ensure scratchpad directory exists
+    crate::ensure_scratchpad_directory(&config)?;
+
+    // Acquire the loop lock (primary loop)
+    let prompt_summary = config.event_loop.prompt.as_deref().unwrap_or("[daemon]");
+    let prompt_summary = if prompt_summary.len() > 100 {
+        format!("{}...", &prompt_summary[..100])
+    } else {
+        prompt_summary.to_string()
+    };
+
+    let _lock_guard = ralph_core::LoopLock::try_acquire(&workspace_root, &prompt_summary)
+        .context("Failed to acquire loop lock — another loop may be running")?;
+
+    let loop_context = ralph_core::LoopContext::primary(workspace_root);
+
+    // Run the loop headlessly
+    run_loop_impl(
+        config,
+        ColorMode::Never,
+        false, // not resume
+        false, // no TUI
+        Verbosity::Quiet,
+        None, // no session recording
+        Some(loop_context),
+        Vec::new(), // no custom args
+        None,       // default auto-merge
+    )
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

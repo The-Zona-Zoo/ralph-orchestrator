@@ -28,6 +28,8 @@ pub enum BotCommands {
     Status,
     /// Send a test message to verify the bot works
     Test(TestArgs),
+    /// Run as a persistent daemon, listening on Telegram and starting loops on demand
+    Daemon,
 }
 
 #[derive(Parser, Debug)]
@@ -65,6 +67,7 @@ pub async fn execute(args: BotArgs, use_colors: bool) -> Result<()> {
         BotCommands::Onboard(onboard_args) => onboard_telegram(onboard_args, use_colors).await,
         BotCommands::Status => bot_status(use_colors).await,
         BotCommands::Test(test_args) => bot_test(test_args, use_colors).await,
+        BotCommands::Daemon => run_daemon(use_colors).await,
     }
 }
 
@@ -372,6 +375,49 @@ async fn bot_test(args: TestArgs, use_colors: bool) -> Result<()> {
             anyhow::bail!("Send failed");
         }
     }
+
+    Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DAEMON COMMAND
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Run the bot daemon — delegates to the configured communication adapter.
+///
+/// Currently only Telegram is supported. The adapter implements
+/// [`DaemonAdapter`] and handles all platform-specific concerns.
+async fn run_daemon(use_colors: bool) -> Result<()> {
+    use ralph_proto::DaemonAdapter;
+
+    let workspace_root = std::env::current_dir().context("Failed to get current directory")?;
+
+    // Resolve bot token and chat_id for Telegram adapter
+    let token = resolve_token().context(
+        "No bot token available. Run `ralph bot onboard --telegram` or set RALPH_TELEGRAM_BOT_TOKEN",
+    )?;
+    let chat_id = resolve_chat_id()
+        .context("No chat_id found. Run `ralph bot onboard --telegram` to detect it")?;
+
+    if use_colors {
+        println!("\x1b[1mRalph Daemon\x1b[0m (Telegram)");
+    } else {
+        println!("Ralph Daemon (Telegram)");
+    }
+
+    // Build the adapter
+    let adapter = ralph_telegram::TelegramDaemon::new(token, chat_id);
+
+    // Build the start_loop callback — wraps our CLI loop runner
+    let start_loop: ralph_proto::StartLoopFn = Box::new(move |prompt: String| {
+        Box::pin(async move {
+            let ws = std::env::current_dir()?;
+            let reason = crate::loop_runner::start_loop(prompt, ws, None).await?;
+            Ok(format!("{:?}", reason))
+        })
+    });
+
+    adapter.run_daemon(workspace_root, start_loop).await?;
 
     Ok(())
 }

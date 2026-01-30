@@ -17,12 +17,14 @@
 
 mod bot;
 pub mod commands;
+pub mod daemon;
 mod error;
 mod handler;
 mod service;
 mod state;
 
 pub use bot::{BotApi, TelegramBot, escape_html, markdown_to_telegram_html};
+pub use daemon::TelegramDaemon;
 pub use error::{TelegramError, TelegramResult};
 pub use handler::MessageHandler;
 pub use service::{

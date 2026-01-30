@@ -288,7 +288,7 @@ fn apply_config_overrides(
 }
 
 /// Ensures the scratchpad's parent directory exists, creating it if needed.
-fn ensure_scratchpad_directory(config: &RalphConfig) -> anyhow::Result<()> {
+pub(crate) fn ensure_scratchpad_directory(config: &RalphConfig) -> anyhow::Result<()> {
     let scratchpad_path = config.core.resolve_path(&config.core.scratchpad);
     if let Some(parent) = scratchpad_path.parent()
         && !parent.exists()
@@ -305,7 +305,9 @@ fn ensure_scratchpad_directory(config: &RalphConfig) -> anyhow::Result<()> {
 /// For the full async path (including Remote URLs), see run_command.
 ///
 /// Returns the loaded config with overrides applied and workspace_root set.
-fn load_config_with_overrides(config_sources: &[ConfigSource]) -> anyhow::Result<RalphConfig> {
+pub(crate) fn load_config_with_overrides(
+    config_sources: &[ConfigSource],
+) -> anyhow::Result<RalphConfig> {
     // Partition sources: file sources vs overrides
     let (primary_sources, overrides): (Vec<_>, Vec<_>) = config_sources
         .iter()

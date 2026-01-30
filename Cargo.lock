@@ -2292,6 +2292,7 @@ dependencies = [
  "ralph-adapters",
  "ralph-core",
  "ralph-proto",
+ "ralph-telegram",
  "ralph-tui",
  "ratatui",
  "regex",
@@ -2353,6 +2354,7 @@ dependencies = [
 name = "ralph-proto"
 version = "2.3.1"
 dependencies = [
+ "anyhow",
  "async-trait",
  "base64 0.22.1",
  "serde",
