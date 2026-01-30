@@ -49,12 +49,7 @@
     "description": "If you can't explain it simply, you don't understand it",
     "category": "documentation"
   },
-  {
-    "name": "executive-ceo",
-    "description": "Executive team workflow with CEO escalation as needed",
-    "category": "workflow"
-  },
-  {
+{
     "name": "feature-minimal",
     "description": "Same as feature.yml but using auto-derived instructions.",
     "category": "development"
