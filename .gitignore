@@ -78,6 +78,7 @@ pbcopy
 .claude/settings.json
 .claude/*.local.md
 .kiro/
+.envrc
 
 # Playwright screenshots
 .playwright-mcp/
