@@ -145,7 +145,7 @@ impl HatlessRalph {
     /// Creates a new HatlessRalph.
     ///
     /// # Arguments
-    /// * `completion_promise` - String that signals loop completion
+    /// * `completion_promise` - Event topic that signals loop completion
     /// * `core` - Core configuration (scratchpad, specs_dir, guardrails)
     /// * `registry` - Hat registry for topology generation
     /// * `starting_event` - Optional event to publish after coordination to start hat workflow
@@ -833,7 +833,8 @@ You MUST NOT use echo/cat to write events because shell escaping breaks JSON.
         let mut section = format!(
             r"## DONE
 
-You MUST output {} when the objective is complete and all tasks are done.
+You MUST emit a completion event `{}` when the objective is complete and all tasks are done.
+You MUST use `ralph emit` (stdout text does NOT end the loop).
 ",
             self.completion_promise
         );
@@ -845,11 +846,11 @@ You MUST output {} when the objective is complete and all tasks are done.
 **Before declaring completion:**
 1. Run `ralph tools task ready` to check for open tasks
 2. If any tasks are open, complete them first
-3. Only output LOOP_COMPLETE when YOUR tasks are all closed
+3. Only emit the completion event when YOUR tasks are all closed
 
 Tasks from other parallel loops are filtered out automatically. You only need to verify tasks YOU created for THIS objective are complete.
 
-You MUST NOT output LOOP_COMPLETE while tasks remain open.
+You MUST NOT emit the completion event while tasks remain open.
 ",
             );
         }
@@ -1713,7 +1714,7 @@ hats:
             "Should reference task ready command in DONE section"
         );
         assert!(
-            prompt.contains("MUST NOT output LOOP_COMPLETE while tasks remain open"),
+            prompt.contains("MUST NOT emit the completion event while tasks remain open"),
             "Should require tasks closed before completion"
         );
     }
@@ -1910,7 +1911,7 @@ hats:
         assert!(prompt.contains("## DONE"), "Should have DONE section");
         assert!(
             prompt.contains("LOOP_COMPLETE"),
-            "DONE should mention completion promise"
+            "DONE should mention completion event"
         );
         assert!(
             !prompt.contains("Remember your objective"),

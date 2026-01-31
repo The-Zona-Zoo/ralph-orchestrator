@@ -194,9 +194,18 @@ mod tests {
         let diagnostics = DiagnosticsCollector::with_enabled(temp_dir.path(), true).unwrap();
         let mut event_loop = EventLoop::with_diagnostics(config, diagnostics);
 
-        // Process output with completion promise twice (requires consecutive confirmation)
-        event_loop.process_output(&"ralph".into(), "LOOP_COMPLETE", true);
-        event_loop.process_output(&"ralph".into(), "LOOP_COMPLETE", true);
+        let events_path = temp_dir.path().join("events.jsonl");
+        event_loop.event_reader = crate::event_reader::EventReader::new(&events_path);
+
+        let event_json = serde_json::json!({
+            "topic": "LOOP_COMPLETE",
+            "payload": "done",
+            "ts": chrono::Utc::now().to_rfc3339()
+        });
+        std::fs::write(&events_path, format!("{event_json}\n")).unwrap();
+
+        let _ = event_loop.process_events_from_jsonl();
+        let _ = event_loop.check_completion_event();
 
         let diagnostics_dir = temp_dir.path().join(".ralph").join("diagnostics");
         let session_dirs: Vec<_> = std::fs::read_dir(&diagnostics_dir)

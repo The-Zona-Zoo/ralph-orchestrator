@@ -66,18 +66,18 @@ event_loop:
     let config: RalphConfig = serde_yaml::from_str(yaml).unwrap();
     let event_loop = EventLoop::new(config);
 
-    // Test: Ralph output with LOOP_COMPLETE should trigger completion
-    let ralph_output = "All tasks complete.\n\nLOOP_COMPLETE";
+    // Test: Ralph output with completion event should trigger completion
+    let ralph_output = r#"<event topic="LOOP_COMPLETE">All tasks complete.</event>"#;
     assert!(
         event_loop.check_ralph_completion(ralph_output),
         "Ralph should be able to trigger completion"
     );
 
-    // Test: Any output with LOOP_COMPLETE should be detected
+    // Test: Plain text completion token should NOT trigger completion
     let output_with_promise = "Some work done\nLOOP_COMPLETE\nMore text";
     assert!(
-        event_loop.check_ralph_completion(output_with_promise),
-        "LOOP_COMPLETE should be detected anywhere in output"
+        !event_loop.check_ralph_completion(output_with_promise),
+        "Completion requires emitted event, not plain text"
     );
 
     // Test: Output without LOOP_COMPLETE should not trigger
@@ -138,7 +138,7 @@ tasks:
     );
     assert!(
         prompt.contains("LOOP_COMPLETE"),
-        "Prompt should include completion promise"
+        "Prompt should include completion event"
     );
 }
 

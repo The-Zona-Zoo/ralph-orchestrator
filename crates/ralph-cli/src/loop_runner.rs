@@ -1035,6 +1035,66 @@ pub async fn run_loop_impl(
             warn!(error = %e, "Failed to read events from JSONL");
         }
 
+        if let Some(reason) = event_loop.check_completion_event() {
+            info!(
+                "Completion event {} detected.",
+                config.event_loop.completion_promise
+            );
+
+            if config.features.chaos_mode.enabled && reason.triggers_chaos_mode() {
+                info!(
+                    "Chaos mode enabled: exploring {} related improvements",
+                    config.features.chaos_mode.max_iterations
+                );
+                debug!(
+                    seed = %prompt_content,
+                    max_iterations = config.features.chaos_mode.max_iterations,
+                    cooldown_seconds = config.features.chaos_mode.cooldown_seconds,
+                    "Chaos mode would use original objective as seed"
+                );
+                let chaos_reason = TerminationReason::ChaosModeComplete;
+                let terminate_event = event_loop.publish_terminate_event(&chaos_reason);
+                log_terminate_event(
+                    &mut event_logger,
+                    event_loop.state().iteration,
+                    &terminate_event,
+                );
+                handle_termination(
+                    &chaos_reason,
+                    event_loop.state(),
+                    &config.core.scratchpad,
+                    &loop_history,
+                    &loop_context,
+                    auto_merge,
+                    &prompt_content,
+                );
+                if let Some(handle) = tui_handle.take() {
+                    let _ = handle.await;
+                }
+                return Ok(chaos_reason);
+            }
+
+            let terminate_event = event_loop.publish_terminate_event(&reason);
+            log_terminate_event(
+                &mut event_logger,
+                event_loop.state().iteration,
+                &terminate_event,
+            );
+            handle_termination(
+                &reason,
+                event_loop.state(),
+                &config.core.scratchpad,
+                &loop_history,
+                &loop_context,
+                auto_merge,
+                &prompt_content,
+            );
+            if let Some(handle) = tui_handle.take() {
+                let _ = handle.await;
+            }
+            return Ok(reason);
+        }
+
         // Precheck validation: Warn if no pending events after processing output
         // Per EventLoop doc: "Use has_pending_events after process_output to detect
         // if the LLM failed to publish an event."

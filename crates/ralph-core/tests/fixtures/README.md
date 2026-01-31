@@ -24,7 +24,7 @@ The format matches the `SessionRecorder` output:
 A minimal smoke test fixture demonstrating:
 - Ralph startup output
 - Event parsing (`build.task`, `build.done`)
-- Completion promise detection (`LOOP_COMPLETE`)
+- Completion event detection (`LOOP_COMPLETE`)
 
 Contains 3 terminal write chunks and 2 parsed events.
 

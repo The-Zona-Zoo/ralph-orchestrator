@@ -331,7 +331,7 @@ Finishing up"#;
         let temp_dir = TempDir::new().unwrap();
 
         let line1 = make_write_line("Working on task...", 0);
-        let line2 = make_write_line("LOOP_COMPLETE", 100);
+        let line2 = make_write_line(r#"<event topic="LOOP_COMPLETE">done</event>"#, 100);
         let content = format!("{}\n{}\n", line1, line2);
 
         let fixture_path = create_fixture(temp_dir.path(), "with_completion.jsonl", &content);

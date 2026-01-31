@@ -320,11 +320,13 @@ fn test_completion_promise_detection() {
     let mut event_loop = EventLoop::new(config);
     event_loop.initialize("Test");
 
-    // Use Ralph since it's the coordinator that outputs completion promise
-    let hat_id = HatId::new("ralph");
+    let events_path = temp_dir.path().join("events.jsonl");
+    event_loop.event_reader = crate::event_reader::EventReader::new(&events_path);
 
-    // LOOP_COMPLETE with all tasks done - should terminate immediately
-    let reason = event_loop.process_output(&hat_id, "Done! LOOP_COMPLETE", true);
+    // LOOP_COMPLETE event with all tasks done - should terminate immediately
+    write_event_to_jsonl(&events_path, "LOOP_COMPLETE", "Done");
+    let _ = event_loop.process_events_from_jsonl();
+    let reason = event_loop.check_completion_event();
     assert_eq!(
         reason,
         Some(TerminationReason::CompletionPromise),
@@ -355,11 +357,14 @@ fn test_completion_promise_with_open_tasks_still_terminates() {
     let mut event_loop = EventLoop::new(config);
     event_loop.initialize("Test");
 
-    let hat_id = HatId::new("ralph");
+    let events_path = temp_dir.path().join("events.jsonl");
+    event_loop.event_reader = crate::event_reader::EventReader::new(&events_path);
 
-    // LOOP_COMPLETE with pending tasks - should STILL terminate (trust the agent)
+    // LOOP_COMPLETE event with pending tasks - should STILL terminate (trust the agent)
     // Previously this would reject completion, but now we trust the agent's decision
-    let reason = event_loop.process_output(&hat_id, "Done! LOOP_COMPLETE", true);
+    write_event_to_jsonl(&events_path, "LOOP_COMPLETE", "Done");
+    let _ = event_loop.process_events_from_jsonl();
+    let reason = event_loop.check_completion_event();
     assert_eq!(
         reason,
         Some(TerminationReason::CompletionPromise),
@@ -394,11 +399,14 @@ fn test_completion_promise_with_pending_tasks_in_task_store() {
     let mut event_loop = EventLoop::new(config);
     event_loop.initialize("Test");
 
-    let hat_id = HatId::new("ralph");
+    let events_path = temp_dir.path().join("events.jsonl");
+    event_loop.event_reader = crate::event_reader::EventReader::new(&events_path);
 
-    // LOOP_COMPLETE with open tasks in task store - should STILL terminate
+    // LOOP_COMPLETE event with open tasks in task store - should STILL terminate
     // The agent knows when the objective is done; not all tasks need to be closed
-    let reason = event_loop.process_output(&hat_id, "Done! LOOP_COMPLETE", true);
+    write_event_to_jsonl(&events_path, "LOOP_COMPLETE", "Done");
+    let _ = event_loop.process_events_from_jsonl();
+    let reason = event_loop.check_completion_event();
     assert_eq!(
         reason,
         Some(TerminationReason::CompletionPromise),
@@ -408,17 +416,26 @@ fn test_completion_promise_with_pending_tasks_in_task_store() {
 
 #[test]
 fn test_builder_cannot_terminate_loop() {
-    // Per spec: "Builder hat outputs LOOP_COMPLETE → completion promise is ignored (only Ralph can terminate)"
+    // Per spec: completion requires an emitted event; output-only tokens are ignored
     let config = RalphConfig::default();
     let mut event_loop = EventLoop::new(config);
     event_loop.initialize("Test");
 
-    // Builder hat outputs completion promise - should be IGNORED
+    // Builder output containing completion promise - should be IGNORED
     let hat_id = HatId::new("builder");
-    let reason = event_loop.process_output(&hat_id, "Done! LOOP_COMPLETE", true);
+    let reason = event_loop.process_output(&hat_id, "Done!\nLOOP_COMPLETE", true);
 
     // Builder cannot terminate, so no termination reason
     assert_eq!(reason, None);
+
+    // Completion event should still terminate
+    let temp_dir = tempfile::tempdir().unwrap();
+    let events_path = temp_dir.path().join("events.jsonl");
+    event_loop.event_reader = crate::event_reader::EventReader::new(&events_path);
+    write_event_to_jsonl(&events_path, "LOOP_COMPLETE", "Done");
+    let _ = event_loop.process_events_from_jsonl();
+    let completion = event_loop.check_completion_event();
+    assert_eq!(completion, Some(TerminationReason::CompletionPromise));
 }
 
 #[test]
@@ -923,12 +940,12 @@ hats:
     let mut event_loop = EventLoop::new(config);
     event_loop.initialize("Test task");
 
-    // Ralph handles task.start, not a specific hat
-    let ralph_id = HatId::new("ralph");
-
     // Simulate completion with some cancelled tasks - should complete immediately
-    let output = "All done! LOOP_COMPLETE";
-    let reason = event_loop.process_output(&ralph_id, output, true);
+    let events_path = temp_dir.path().join("events.jsonl");
+    event_loop.event_reader = crate::event_reader::EventReader::new(&events_path);
+    write_event_to_jsonl(&events_path, "LOOP_COMPLETE", "Done");
+    let _ = event_loop.process_events_from_jsonl();
+    let reason = event_loop.check_completion_event();
     assert_eq!(
         reason,
         Some(TerminationReason::CompletionPromise),
@@ -1240,7 +1257,7 @@ fn test_hatless_mode_builds_ralph_prompt() {
     );
     assert!(
         prompt.contains("LOOP_COMPLETE"),
-        "Should reference completion promise"
+        "Should reference completion event"
     );
 }
 
@@ -1647,7 +1664,7 @@ hats:
 #[test]
 fn test_done_section_suppressed_for_active_hat_via_event_loop() {
     // When a hat is active (triggered by an event), the DONE section should NOT appear.
-    // This prevents intermediate hats from seeing LOOP_COMPLETE instructions.
+    // This prevents intermediate hats from seeing completion instructions.
     let yaml = r#"
 hats:
   implementer:
@@ -1677,8 +1694,8 @@ hats:
         "DONE section should be suppressed when a hat is active"
     );
     assert!(
-        !prompt.contains("You MUST output LOOP_COMPLETE"),
-        "LOOP_COMPLETE instruction should not appear for active hat"
+        !prompt.contains("You MUST emit a completion event"),
+        "Completion instruction should not appear for active hat"
     );
 
     // But the objective should still be visible
@@ -1895,8 +1912,12 @@ fn test_check_ralph_completion_detection() {
     let event_loop = EventLoop::new(config);
 
     assert!(
-        event_loop.check_ralph_completion("LOOP_COMPLETE"),
-        "Should detect LOOP_COMPLETE"
+        event_loop.check_ralph_completion(r#"<event topic="LOOP_COMPLETE">done</event>"#),
+        "Should detect completion event"
+    );
+    assert!(
+        !event_loop.check_ralph_completion("LOOP_COMPLETE\nMore text"),
+        "Completion requires emitted event, not plain text"
     );
     assert!(
         !event_loop.check_ralph_completion("no match here"),

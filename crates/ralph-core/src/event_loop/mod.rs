@@ -543,6 +543,44 @@ impl EventLoop {
         None
     }
 
+    /// Checks if a completion event was received and returns termination reason.
+    ///
+    /// Completion is only accepted via JSONL events (e.g., `ralph emit`).
+    pub fn check_completion_event(&mut self) -> Option<TerminationReason> {
+        if !self.state.completion_requested {
+            return None;
+        }
+
+        self.state.completion_requested = false;
+
+        // Log warning if tasks remain open (informational only)
+        if self.config.memories.enabled {
+            if let Ok(false) = self.verify_tasks_complete() {
+                let open_tasks = self.get_open_task_list();
+                warn!(
+                    open_tasks = ?open_tasks,
+                    "Completion event with {} open task(s) - trusting agent decision",
+                    open_tasks.len()
+                );
+            }
+        } else if let Ok(false) = self.verify_scratchpad_complete() {
+            warn!("Completion event with pending scratchpad tasks - trusting agent decision");
+        }
+
+        info!("Completion event detected - terminating");
+
+        // Log loop terminated
+        self.diagnostics.log_orchestration(
+            self.state.iteration,
+            "loop",
+            crate::diagnostics::OrchestrationEvent::LoopTerminated {
+                reason: "completion_event".to_string(),
+            },
+        );
+
+        Some(TerminationReason::CompletionPromise)
+    }
+
     /// Initializes the loop by publishing the start event.
     pub fn initialize(&mut self, prompt_content: &str) {
         // Use configured starting_event or default to task.start for backward compatibility
@@ -1463,40 +1501,7 @@ impl EventLoop {
             self.state.consecutive_failures += 1;
         }
 
-        // Check for completion promise - only valid from Ralph (the coordinator)
-        // Trust the agent's decision to complete - it knows when the objective is done.
-        // Open tasks are logged as a warning but do not block completion.
-        if hat_id.as_str() == "ralph"
-            && EventParser::contains_promise(output, &self.config.event_loop.completion_promise)
-        {
-            // Log warning if tasks remain open (informational only)
-            if self.config.memories.enabled {
-                if let Ok(false) = self.verify_tasks_complete() {
-                    let open_tasks = self.get_open_task_list();
-                    warn!(
-                        open_tasks = ?open_tasks,
-                        "LOOP_COMPLETE with {} open task(s) - trusting agent decision",
-                        open_tasks.len()
-                    );
-                }
-            } else if let Ok(false) = self.verify_scratchpad_complete() {
-                warn!("LOOP_COMPLETE with pending scratchpad tasks - trusting agent decision");
-            }
-
-            // Trust the agent - terminate immediately
-            info!("LOOP_COMPLETE detected - terminating");
-
-            // Log loop terminated
-            self.diagnostics.log_orchestration(
-                self.state.iteration,
-                "loop",
-                crate::diagnostics::OrchestrationEvent::LoopTerminated {
-                    reason: "completion_promise".to_string(),
-                },
-            );
-
-            return Some(TerminationReason::CompletionPromise);
-        }
+        let _ = output;
 
         // Events are ONLY read from the JSONL file written by `ralph emit`.
         // This enforces tool use and prevents confabulation (agent claiming to emit without actually doing so).
@@ -1660,8 +1665,25 @@ impl EventLoop {
 
         // Validate and transform events (apply backpressure for build.done)
         let mut validated_events = Vec::new();
+        let completion_topic = self.config.event_loop.completion_promise.as_str();
         for event in result.events {
             let payload = event.payload.clone().unwrap_or_default();
+
+            if event.topic == completion_topic {
+                self.state.completion_requested = true;
+                self.diagnostics.log_orchestration(
+                    self.state.iteration,
+                    "jsonl",
+                    crate::diagnostics::OrchestrationEvent::EventPublished {
+                        topic: event.topic.clone(),
+                    },
+                );
+                info!(
+                    topic = %event.topic,
+                    "Completion event detected in JSONL"
+                );
+                continue;
+            }
 
             if event.topic == "build.done" {
                 // Validate build.done events have backpressure evidence
@@ -1943,11 +1965,14 @@ impl EventLoop {
         Ok(has_orphans)
     }
 
-    /// Checks if output contains LOOP_COMPLETE from Ralph.
+    /// Checks if output contains a completion event from Ralph.
     ///
-    /// Only Ralph can trigger loop completion. Hat outputs are ignored.
+    /// Completion must be emitted as an `<event>` tag, not plain text.
     pub fn check_ralph_completion(&self, output: &str) -> bool {
-        EventParser::contains_promise(output, &self.config.event_loop.completion_promise)
+        let events = EventParser::new().parse(output);
+        events
+            .iter()
+            .any(|event| event.topic.as_str() == self.config.event_loop.completion_promise)
     }
 
     /// Publishes the loop.terminate system event to observers.

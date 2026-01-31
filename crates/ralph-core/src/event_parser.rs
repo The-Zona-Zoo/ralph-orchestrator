@@ -250,14 +250,29 @@ impl EventParser {
     /// not inside an `<event>` tag payload. This function:
     /// 1. Returns false if the promise appears inside ANY event tag
     ///    (prevents accidental completion when agents discuss the promise)
-    /// 2. Otherwise, checks for the promise in the stripped output
+    /// 2. Otherwise, checks that the promise is the final non-empty line
+    ///    in the stripped output (prevents prompt echo false positives)
     pub fn contains_promise(output: &str, promise: &str) -> bool {
+        let promise = promise.trim();
+        if promise.is_empty() {
+            return false;
+        }
+
         // Safety check: if promise appears inside any event tag, never complete
         if Self::promise_in_event_tags(output, promise) {
             return false;
         }
         let stripped = Self::strip_event_tags(output);
-        stripped.contains(promise)
+
+        for line in stripped.lines().rev() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            return trimmed == promise;
+        }
+
+        false
     }
 
     /// Checks if the promise appears inside any event tag payload.
@@ -390,15 +405,28 @@ Working on implementation...
     }
 
     #[test]
-    fn test_contains_promise() {
+    fn test_contains_promise_requires_last_line() {
         assert!(EventParser::contains_promise(
             "LOOP_COMPLETE",
             "LOOP_COMPLETE"
         ));
         assert!(EventParser::contains_promise(
+            "All done!\nLOOP_COMPLETE",
+            "LOOP_COMPLETE"
+        ));
+        assert!(EventParser::contains_promise(
+            "LOOP_COMPLETE   \n\n",
+            "LOOP_COMPLETE"
+        ));
+        assert!(!EventParser::contains_promise(
             "prefix LOOP_COMPLETE suffix",
             "LOOP_COMPLETE"
         ));
+        assert!(!EventParser::contains_promise(
+            "LOOP_COMPLETE\nMore text",
+            "LOOP_COMPLETE"
+        ));
+        assert!(!EventParser::contains_promise("Any output", "   "));
         assert!(!EventParser::contains_promise(
             "No promise here",
             "LOOP_COMPLETE"
@@ -424,7 +452,8 @@ Working on implementation...
     fn test_contains_promise_detects_outside_events() {
         // Promise outside event tags should be detected
         let output = r#"<event topic="build.done">Task complete</event>
-All done! LOOP_COMPLETE"#;
+All done!
+LOOP_COMPLETE"#;
         assert!(EventParser::contains_promise(output, "LOOP_COMPLETE"));
 
         // Promise before event tags

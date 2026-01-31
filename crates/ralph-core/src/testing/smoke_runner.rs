@@ -209,8 +209,11 @@ impl SmokeRunner {
                 let events = parser.parse(&output);
                 events_parsed += events.len();
 
-                // Check for completion promise
-                if crate::EventParser::contains_promise(&output, "LOOP_COMPLETE") {
+                // Check for completion event (must be emitted as an event)
+                if events
+                    .iter()
+                    .any(|event| event.topic.as_str() == "LOOP_COMPLETE")
+                {
                     return Ok(SmokeTestResult {
                         iterations,
                         events_parsed,
@@ -307,9 +310,9 @@ mod tests {
     fn test_captures_completion_termination() {
         let temp_dir = TempDir::new().unwrap();
 
-        // Create a fixture with completion promise
+        // Create a fixture with completion event
         let line1 = make_write_line("Working...", 0);
-        let line2 = make_write_line("LOOP_COMPLETE", 100);
+        let line2 = make_write_line(r#"<event topic="LOOP_COMPLETE">done</event>"#, 100);
         let content = format!("{}\n{}\n", line1, line2);
 
         let fixture_path = create_fixture(temp_dir.path(), "completion.jsonl", &content);

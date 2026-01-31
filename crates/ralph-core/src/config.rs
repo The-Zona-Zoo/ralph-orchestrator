@@ -360,6 +360,9 @@ impl RalphConfig {
                 field2: "event_loop.prompt_file".to_string(),
             });
         }
+        if self.event_loop.completion_promise.trim().is_empty() {
+            return Err(ConfigError::InvalidCompletionPromise);
+        }
 
         // Check custom backend has a command
         if self.cli.backend == "custom" && self.cli.command.as_ref().is_none_or(String::is_empty) {
@@ -524,7 +527,7 @@ pub struct EventLoopConfig {
     #[serde(default = "default_prompt_file")]
     pub prompt_file: String,
 
-    /// String that signals loop completion.
+    /// Event topic that signals loop completion (must be emitted via `ralph emit`).
     #[serde(default = "default_completion_promise")]
     pub completion_promise: String,
 
@@ -1406,6 +1409,9 @@ pub enum ConfigError {
     #[error("Mutually exclusive fields: '{field1}' and '{field2}' cannot both be specified")]
     MutuallyExclusive { field1: String, field2: String },
 
+    #[error("Invalid completion_promise: must be non-empty and non-whitespace")]
+    InvalidCompletionPromise,
+
     #[error("Custom backend requires a command - set 'cli.command' in config")]
     CustomBackendRequiresCommand,
 
@@ -1839,6 +1845,24 @@ cli:
         assert!(
             matches!(&err, ConfigError::CustomBackendRequiresCommand),
             "Expected CustomBackendRequiresCommand error, got: {:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_empty_completion_promise_rejected() {
+        let yaml = r#"
+event_loop:
+  completion_promise: "   "
+"#;
+        let config: RalphConfig = serde_yaml::from_str(yaml).unwrap();
+        let result = config.validate();
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(&err, ConfigError::InvalidCompletionPromise),
+            "Expected InvalidCompletionPromise error, got: {:?}",
             err
         );
     }
