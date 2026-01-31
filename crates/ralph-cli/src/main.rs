@@ -2659,4 +2659,12 @@ core:
         assert!(list_directory_contents(temp_dir.path(), false, 0).is_ok());
         assert!(list_directory_contents(temp_dir.path(), true, 0).is_ok());
     }
+
+    #[test]
+    fn test_list_directory_contents_missing_path_returns_error() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let missing = temp_dir.path().join("missing");
+
+        assert!(list_directory_contents(&missing, false, 0).is_err());
+    }
 }

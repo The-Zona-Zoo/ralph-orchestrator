@@ -1495,8 +1495,12 @@ fn build_result(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use crate::cli_backend::PromptMode;
     use crate::claude_stream::{AssistantMessage, UserMessage};
     use crate::stream_handler::{SessionResult, StreamHandler};
+    #[cfg(unix)]
+    use tempfile::TempDir;
 
     #[test]
     fn test_double_ctrl_c_within_window() {
@@ -1920,6 +1924,105 @@ mod tests {
         assert!(!result.stripped_output.contains("\x1b["));
         assert_eq!(result.extracted_text, extracted);
         assert!(result.success);
+        assert_eq!(result.exit_code, Some(0));
+        assert_eq!(result.termination, TerminationType::Natural);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_run_observe_executes_arg_prompt() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let backend = CliBackend {
+            command: "sh".to_string(),
+            args: vec!["-c".to_string()],
+            prompt_mode: PromptMode::Arg,
+            prompt_flag: None,
+            output_format: OutputFormat::Text,
+        };
+        let config = PtyConfig {
+            interactive: false,
+            idle_timeout_secs: 0,
+            cols: 80,
+            rows: 24,
+            workspace_root: temp_dir.path().to_path_buf(),
+        };
+        let executor = PtyExecutor::new(backend, config);
+        let (_tx, rx) = tokio::sync::watch::channel(false);
+
+        let result = executor
+            .run_observe("echo hello-pty", rx)
+            .await
+            .expect("run_observe");
+
+        assert!(result.success);
+        assert!(result.output.contains("hello-pty"));
+        assert!(result.stripped_output.contains("hello-pty"));
+        assert_eq!(result.exit_code, Some(0));
+        assert_eq!(result.termination, TerminationType::Natural);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_run_observe_writes_stdin_prompt() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let backend = CliBackend {
+            command: "sh".to_string(),
+            args: vec!["-c".to_string(), "read line; echo \"$line\"".to_string()],
+            prompt_mode: PromptMode::Stdin,
+            prompt_flag: None,
+            output_format: OutputFormat::Text,
+        };
+        let config = PtyConfig {
+            interactive: false,
+            idle_timeout_secs: 0,
+            cols: 80,
+            rows: 24,
+            workspace_root: temp_dir.path().to_path_buf(),
+        };
+        let executor = PtyExecutor::new(backend, config);
+        let (_tx, rx) = tokio::sync::watch::channel(false);
+
+        let result = executor
+            .run_observe("stdin-line", rx)
+            .await
+            .expect("run_observe");
+
+        assert!(result.success);
+        assert!(result.output.contains("stdin-line"));
+        assert!(result.stripped_output.contains("stdin-line"));
+        assert_eq!(result.termination, TerminationType::Natural);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_run_interactive_in_tui_mode() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let backend = CliBackend {
+            command: "sh".to_string(),
+            args: vec!["-c".to_string()],
+            prompt_mode: PromptMode::Arg,
+            prompt_flag: None,
+            output_format: OutputFormat::Text,
+        };
+        let config = PtyConfig {
+            interactive: true,
+            idle_timeout_secs: 0,
+            cols: 80,
+            rows: 24,
+            workspace_root: temp_dir.path().to_path_buf(),
+        };
+        let mut executor = PtyExecutor::new(backend, config);
+        executor.set_tui_mode(true);
+        let (_tx, rx) = tokio::sync::watch::channel(false);
+
+        let result = executor
+            .run_interactive("echo hello-tui", rx)
+            .await
+            .expect("run_interactive");
+
+        assert!(result.success);
+        assert!(result.output.contains("hello-tui"));
+        assert!(result.stripped_output.contains("hello-tui"));
         assert_eq!(result.exit_code, Some(0));
         assert_eq!(result.termination, TerminationType::Natural);
     }
