@@ -435,14 +435,14 @@ mod tests {
     fn mock_backpressure_result() -> crate::executor::ExecutionResult {
         crate::executor::ExecutionResult {
             exit_code: Some(0),
-            stdout: "<event topic=\"build.done\">tests: pass, lint: pass</event>\nLOOP_COMPLETE"
+            stdout: "<event topic=\"build.done\">tests: pass, lint: pass, typecheck: pass, audit: pass</event>\nLOOP_COMPLETE"
                 .to_string(),
             stderr: String::new(),
             duration: Duration::from_secs(8),
             scratchpad: None,
             events: vec![EventRecord {
                 topic: "build.done".to_string(),
-                payload: "tests: pass, lint: pass".to_string(),
+                payload: "tests: pass, lint: pass, typecheck: pass, audit: pass".to_string(),
             }],
             iterations: 1,
             termination_reason: Some("LOOP_COMPLETE".to_string()),

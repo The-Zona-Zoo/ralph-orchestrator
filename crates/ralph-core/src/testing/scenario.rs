@@ -111,6 +111,7 @@ mod tests {
 tests: pass
 lint: pass
 typecheck: pass
+audit: pass
 </event>"#
                 .to_string(),
         ];

@@ -30,6 +30,9 @@ mock_responses:
     Built with Claude.
     <event topic="build.done">
     tests: pass
+    lint: pass
+    typecheck: pass
+    audit: pass
     </event>
   - |
     Reviewed with Kiro.

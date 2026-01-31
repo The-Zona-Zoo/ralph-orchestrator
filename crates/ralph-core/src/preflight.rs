@@ -330,7 +330,7 @@ impl ToolsInPathCheck {
 
 impl Default for ToolsInPathCheck {
     fn default() -> Self {
-        Self::new(vec!["git".to_string()])
+        Self::new(vec!["git".to_string(), "cargo-audit".to_string()])
     }
 }
 

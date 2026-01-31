@@ -26,6 +26,9 @@ mock_responses:
     Feature implemented.
     <event topic="build.done">
     tests: pass
+    lint: pass
+    typecheck: pass
+    audit: pass
     </event>
   - |
     Code reviewed.

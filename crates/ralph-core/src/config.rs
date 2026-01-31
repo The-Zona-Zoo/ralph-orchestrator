@@ -644,7 +644,7 @@ fn default_guardrails() -> Vec<String> {
     vec![
         "Fresh context each iteration - scratchpad is memory".to_string(),
         "Don't assume 'not implemented' - search first".to_string(),
-        "Backpressure is law - tests/typecheck/lint must pass".to_string(),
+        "Backpressure is law - tests/typecheck/lint/audit must pass".to_string(),
         "Commit atomically - one logical change per commit, capture the why".to_string(),
     ]
 }

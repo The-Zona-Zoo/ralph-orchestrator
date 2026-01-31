@@ -1701,6 +1701,7 @@ impl EventLoop {
                             tests = evidence.tests_passed,
                             lint = evidence.lint_passed,
                             typecheck = evidence.typecheck_passed,
+                            audit = evidence.audit_passed,
                             "build.done rejected: backpressure checks failed"
                         );
 
@@ -1709,17 +1710,18 @@ impl EventLoop {
                             "jsonl",
                             crate::diagnostics::OrchestrationEvent::BackpressureTriggered {
                                 reason: format!(
-                                    "backpressure checks failed: tests={}, lint={}, typecheck={}",
+                                    "backpressure checks failed: tests={}, lint={}, typecheck={}, audit={}",
                                     evidence.tests_passed,
                                     evidence.lint_passed,
-                                    evidence.typecheck_passed
+                                    evidence.typecheck_passed,
+                                    evidence.audit_passed
                                 ),
                             },
                         );
 
                         validated_events.push(Event::new(
                             "build.blocked",
-                            "Backpressure checks failed. Fix tests/lint/typecheck before emitting build.done.",
+                            "Backpressure checks failed. Fix tests/lint/typecheck/audit before emitting build.done.",
                         ));
                     }
                 } else {
@@ -1736,7 +1738,7 @@ impl EventLoop {
 
                     validated_events.push(Event::new(
                         "build.blocked",
-                        "Missing backpressure evidence. Include 'tests: pass', 'lint: pass', 'typecheck: pass' in build.done payload.",
+                        "Missing backpressure evidence. Include 'tests: pass', 'lint: pass', 'typecheck: pass', 'audit: pass' in build.done payload.",
                     ));
                 }
             } else if event.topic == "review.done" {

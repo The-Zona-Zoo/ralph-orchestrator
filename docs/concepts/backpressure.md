@@ -20,7 +20,7 @@ Backpressure approach:
 
 ```
 Implement the feature.
-Evidence required: tests: pass, lint: pass, typecheck: pass
+Evidence required: tests: pass, lint: pass, typecheck: pass, audit: pass
 ```
 
 The AI figures out the "how" — it's smart enough. Your job is defining "what success looks like."
@@ -41,10 +41,11 @@ hats:
       - tests: pass (run `cargo test`)
       - lint: pass (run `cargo clippy`)
       - typecheck: pass (run `cargo check`)
+      - audit: pass (run `cargo audit`)
 
       Include evidence in your event:
       ```
-      ralph emit "build.done" "tests: pass, lint: pass, typecheck: pass"
+      ralph emit "build.done" "tests: pass, lint: pass, typecheck: pass, audit: pass"
       ```
 ```
 
@@ -89,6 +90,7 @@ hats:
 | Tests | `cargo test`, `npm test` | Regressions, bugs |
 | Lint | `cargo clippy`, `eslint` | Code quality issues |
 | Typecheck | `cargo check`, `tsc` | Type errors |
+| Audit | `cargo audit`, `npm audit` | Known vulnerabilities |
 | Format | `cargo fmt --check` | Style violations |
 | Build | `cargo build` | Compilation errors |
 
@@ -198,7 +200,7 @@ Different levels of strictness:
 evidence: "tests: pass"
 
 # Later iteration: full checks
-evidence: "tests: pass, lint: pass, coverage: 80%+"
+evidence: "tests: pass, lint: pass, audit: pass, coverage: 80%+"
 ```
 
 ### Escape Hatches

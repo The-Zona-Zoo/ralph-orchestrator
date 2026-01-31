@@ -74,7 +74,7 @@ hats:
 
       ### Event Format
       ```bash
-      ralph emit "build.done" "tests: pass, lint: pass. Summary of what was done"
+      ralph emit "build.done" "tests: pass, lint: pass, typecheck: pass, audit: pass. Summary of what was done"
       ```
 
       If stuck:
@@ -167,4 +167,3 @@ hats:
          - Output the completion promise.
       3. If your verification fails OR `confidence` < 90:
          - Publish `build.task` with instructions to fix the discrepancy (or redo the confession).
-

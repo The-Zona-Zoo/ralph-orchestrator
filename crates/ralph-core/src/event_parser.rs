@@ -71,12 +71,13 @@ pub struct BackpressureEvidence {
     pub tests_passed: bool,
     pub lint_passed: bool,
     pub typecheck_passed: bool,
+    pub audit_passed: bool,
 }
 
 impl BackpressureEvidence {
     /// Returns true if all checks passed.
     pub fn all_passed(&self) -> bool {
-        self.tests_passed && self.lint_passed && self.typecheck_passed
+        self.tests_passed && self.lint_passed && self.typecheck_passed && self.audit_passed
     }
 }
 
@@ -191,6 +192,7 @@ impl EventParser {
     /// tests: pass
     /// lint: pass
     /// typecheck: pass
+    /// audit: pass
     /// ```
     ///
     /// Note: ANSI escape codes are stripped before parsing to handle
@@ -202,16 +204,19 @@ impl EventParser {
         let tests_passed = clean_payload.contains("tests: pass");
         let lint_passed = clean_payload.contains("lint: pass");
         let typecheck_passed = clean_payload.contains("typecheck: pass");
+        let audit_passed = clean_payload.contains("audit: pass");
 
         // Only return evidence if at least one check is mentioned
         if clean_payload.contains("tests:")
             || clean_payload.contains("lint:")
             || clean_payload.contains("typecheck:")
+            || clean_payload.contains("audit:")
         {
             Some(BackpressureEvidence {
                 tests_passed,
                 lint_passed,
                 typecheck_passed,
+                audit_passed,
             })
         } else {
             None
@@ -519,21 +524,23 @@ Still working..."#;
 
     #[test]
     fn test_parse_backpressure_evidence_all_pass() {
-        let payload = "tests: pass\nlint: pass\ntypecheck: pass";
+        let payload = "tests: pass\nlint: pass\ntypecheck: pass\naudit: pass";
         let evidence = EventParser::parse_backpressure_evidence(payload).unwrap();
         assert!(evidence.tests_passed);
         assert!(evidence.lint_passed);
         assert!(evidence.typecheck_passed);
+        assert!(evidence.audit_passed);
         assert!(evidence.all_passed());
     }
 
     #[test]
     fn test_parse_backpressure_evidence_some_fail() {
-        let payload = "tests: pass\nlint: fail\ntypecheck: pass";
+        let payload = "tests: pass\nlint: fail\ntypecheck: pass\naudit: pass";
         let evidence = EventParser::parse_backpressure_evidence(payload).unwrap();
         assert!(evidence.tests_passed);
         assert!(!evidence.lint_passed);
         assert!(evidence.typecheck_passed);
+        assert!(evidence.audit_passed);
         assert!(!evidence.all_passed());
     }
 
@@ -551,16 +558,18 @@ Still working..."#;
         assert!(evidence.tests_passed);
         assert!(!evidence.lint_passed);
         assert!(!evidence.typecheck_passed);
+        assert!(!evidence.audit_passed);
         assert!(!evidence.all_passed());
     }
 
     #[test]
     fn test_parse_backpressure_evidence_with_ansi_codes() {
-        let payload = "\x1b[0mtests: pass\x1b[0m\n\x1b[32mlint: pass\x1b[0m\ntypecheck: pass";
+        let payload = "\x1b[0mtests: pass\x1b[0m\n\x1b[32mlint: pass\x1b[0m\ntypecheck: pass\n\x1b[34maudit: pass\x1b[0m";
         let evidence = EventParser::parse_backpressure_evidence(payload).unwrap();
         assert!(evidence.tests_passed);
         assert!(evidence.lint_passed);
         assert!(evidence.typecheck_passed);
+        assert!(evidence.audit_passed);
         assert!(evidence.all_passed());
     }
 
