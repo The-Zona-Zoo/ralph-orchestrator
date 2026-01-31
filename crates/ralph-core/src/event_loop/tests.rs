@@ -3020,3 +3020,184 @@ fn test_termination_reason_strings_and_flags() {
         );
     }
 }
+
+#[test]
+fn test_has_pending_human_events_detects_guidance() {
+    let mut event_loop = EventLoop::new(RalphConfig::default());
+    event_loop
+        .bus
+        .publish(Event::new("human.guidance", "Please focus on tests"));
+
+    assert!(event_loop.has_pending_human_events());
+}
+
+#[test]
+fn test_has_pending_human_events_ignores_non_human() {
+    let mut event_loop = EventLoop::new(RalphConfig::default());
+    event_loop.bus.publish(Event::new("task.start", "Do work"));
+
+    assert!(!event_loop.has_pending_human_events());
+}
+
+#[test]
+fn test_get_hat_publishes_returns_configured_topics() {
+    let yaml = r#"
+hats:
+  planner:
+    name: "Planner"
+    triggers: ["task.start"]
+    publishes: ["task.plan", "build.done"]
+"#;
+    let config: RalphConfig = serde_yaml::from_str(yaml).unwrap();
+    let event_loop = EventLoop::new(config);
+
+    let publishes = event_loop.get_hat_publishes(&HatId::new("planner"));
+    assert_eq!(
+        publishes,
+        vec!["task.plan".to_string(), "build.done".to_string()]
+    );
+
+    let missing = event_loop.get_hat_publishes(&HatId::new("missing"));
+    assert!(missing.is_empty());
+}
+
+#[test]
+fn test_inject_fallback_event_targets_last_hat() {
+    let yaml = r#"
+hats:
+  planner:
+    name: "Planner"
+    triggers: ["task.resume"]
+    publishes: ["task.plan"]
+"#;
+    let config: RalphConfig = serde_yaml::from_str(yaml).unwrap();
+    let mut event_loop = EventLoop::new(config);
+    let planner_id = HatId::new("planner");
+
+    event_loop.state.last_hat = Some(planner_id.clone());
+    assert!(event_loop.inject_fallback_event());
+
+    let pending = event_loop
+        .bus
+        .peek_pending(&planner_id)
+        .expect("planner pending");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].topic.as_str(), "task.resume");
+    assert_eq!(
+        pending[0].target.as_ref().map(|id| id.as_str()),
+        Some("planner")
+    );
+
+    let ralph_id = HatId::new("ralph");
+    let ralph_pending = event_loop.bus.peek_pending(&ralph_id);
+    assert!(ralph_pending.map_or(true, |events| events.is_empty()));
+}
+
+#[test]
+fn test_inject_fallback_event_defaults_to_ralph() {
+    let mut event_loop = EventLoop::new(RalphConfig::default());
+    event_loop.state.last_hat = None;
+
+    assert!(event_loop.inject_fallback_event());
+
+    let ralph_id = HatId::new("ralph");
+    let pending = event_loop.bus.peek_pending(&ralph_id).expect("ralph pending");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].topic.as_str(), "task.resume");
+    assert!(pending[0].target.is_none());
+}
+
+#[test]
+fn test_paths_use_loop_context_when_present() {
+    use crate::loop_context::LoopContext;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let loop_context = LoopContext::primary(temp_dir.path().to_path_buf());
+    let event_loop = EventLoop::with_context(RalphConfig::default(), loop_context);
+
+    assert_eq!(
+        event_loop.tasks_path(),
+        temp_dir.path().join(".ralph/agent/tasks.jsonl")
+    );
+    assert_eq!(
+        event_loop.scratchpad_path(),
+        temp_dir.path().join(".ralph/agent/scratchpad.md")
+    );
+}
+
+#[test]
+fn test_paths_fallback_to_config_when_no_context() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let scratchpad_path = temp_dir.path().join("scratchpad.md");
+    let mut config = RalphConfig::default();
+    config.core.scratchpad = scratchpad_path.to_string_lossy().to_string();
+
+    let event_loop = EventLoop::new(config);
+
+    assert_eq!(
+        event_loop.tasks_path(),
+        std::path::PathBuf::from(".ralph/agent/tasks.jsonl")
+    );
+    assert_eq!(event_loop.scratchpad_path(), scratchpad_path);
+}
+
+#[test]
+fn test_record_hat_activations_increments_counts() {
+    let mut event_loop = EventLoop::new(RalphConfig::default());
+    let planner = HatId::new("planner");
+    let reviewer = HatId::new("reviewer");
+
+    event_loop.record_hat_activations(&[planner.clone(), reviewer.clone()]);
+    event_loop.record_hat_activations(&[planner.clone()]);
+
+    assert_eq!(
+        event_loop.state.hat_activation_counts.get(&planner),
+        Some(&2)
+    );
+    assert_eq!(
+        event_loop.state.hat_activation_counts.get(&reviewer),
+        Some(&1)
+    );
+}
+
+#[test]
+fn test_check_hat_exhaustion_emits_once_at_limit() {
+    let yaml = r#"
+hats:
+  reviewer:
+    name: "Reviewer"
+    triggers: ["review.done"]
+    publishes: ["review.blocked"]
+    max_activations: 2
+"#;
+    let config: RalphConfig = serde_yaml::from_str(yaml).unwrap();
+    let mut event_loop = EventLoop::new(config);
+    let hat_id = HatId::new("reviewer");
+    let dropped = vec![
+        Event::new("review.done", "ok"),
+        Event::new("build.done", "ok"),
+    ];
+
+    event_loop
+        .state
+        .hat_activation_counts
+        .insert(hat_id.clone(), 1);
+    let (drop, event) = event_loop.check_hat_exhaustion(&hat_id, &dropped);
+    assert!(!drop);
+    assert!(event.is_none());
+
+    event_loop
+        .state
+        .hat_activation_counts
+        .insert(hat_id.clone(), 2);
+    let (drop, event) = event_loop.check_hat_exhaustion(&hat_id, &dropped);
+    assert!(drop);
+    let exhausted = event.expect("exhausted event");
+    assert_eq!(exhausted.topic.as_str(), "reviewer.exhausted");
+    assert!(exhausted.payload.contains("max_activations: 2"));
+    assert!(exhausted.payload.contains("activations: 2"));
+
+    let (drop_again, event_again) = event_loop.check_hat_exhaustion(&hat_id, &dropped);
+    assert!(drop_again);
+    assert!(event_again.is_none());
+}
