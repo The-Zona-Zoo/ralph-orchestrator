@@ -1104,6 +1104,21 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_loop_from_merge_queue_entry() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let _cwd = CwdGuard::set(temp_dir.path());
+
+        let queue = MergeQueue::new(temp_dir.path());
+        queue
+            .enqueue("loop-queue-1234", "merge prompt")
+            .expect("enqueue");
+
+        let (id, worktree) = resolve_loop(temp_dir.path(), "loop-queue-1234").expect("resolve");
+        assert_eq!(id, "loop-queue-1234");
+        assert_eq!(worktree, None);
+    }
+
+    #[test]
     fn test_resolve_loop_missing_returns_error() {
         let temp_dir = tempfile::tempdir().expect("temp dir");
         let _cwd = CwdGuard::set(temp_dir.path());

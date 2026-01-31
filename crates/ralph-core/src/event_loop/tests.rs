@@ -2940,3 +2940,83 @@ fn test_verify_scratchpad_complete_variants() {
     .unwrap();
     assert_eq!(event_loop.verify_scratchpad_complete().unwrap(), true);
 }
+
+#[test]
+fn test_termination_reason_exit_codes() {
+    let cases = [
+        (TerminationReason::CompletionPromise, 0),
+        (TerminationReason::ChaosModeComplete, 0),
+        (TerminationReason::ConsecutiveFailures, 1),
+        (TerminationReason::LoopThrashing, 1),
+        (TerminationReason::ValidationFailure, 1),
+        (TerminationReason::Stopped, 1),
+        (TerminationReason::MaxIterations, 2),
+        (TerminationReason::MaxRuntime, 2),
+        (TerminationReason::MaxCost, 2),
+        (TerminationReason::ChaosModeMaxIterations, 2),
+        (TerminationReason::Interrupted, 130),
+        (TerminationReason::RestartRequested, 3),
+    ];
+
+    for (reason, code) in cases {
+        assert_eq!(reason.exit_code(), code, "{reason:?} exit code mismatch");
+    }
+}
+
+#[test]
+fn test_termination_reason_strings_and_flags() {
+    let cases = [
+        (
+            TerminationReason::CompletionPromise,
+            "completed",
+            true,
+            true,
+        ),
+        (
+            TerminationReason::MaxIterations,
+            "max_iterations",
+            false,
+            false,
+        ),
+        (TerminationReason::MaxRuntime, "max_runtime", false, false),
+        (TerminationReason::MaxCost, "max_cost", false, false),
+        (
+            TerminationReason::ConsecutiveFailures,
+            "consecutive_failures",
+            false,
+            false,
+        ),
+        (TerminationReason::LoopThrashing, "loop_thrashing", false, false),
+        (
+            TerminationReason::ValidationFailure,
+            "validation_failure",
+            false,
+            false,
+        ),
+        (TerminationReason::Stopped, "stopped", false, false),
+        (TerminationReason::Interrupted, "interrupted", false, false),
+        (TerminationReason::ChaosModeComplete, "chaos_complete", true, false),
+        (
+            TerminationReason::ChaosModeMaxIterations,
+            "chaos_max_iterations",
+            false,
+            false,
+        ),
+        (
+            TerminationReason::RestartRequested,
+            "restart_requested",
+            false,
+            false,
+        ),
+    ];
+
+    for (reason, expected_str, is_success, triggers_chaos) in cases {
+        assert_eq!(reason.as_str(), expected_str, "{reason:?} as_str mismatch");
+        assert_eq!(reason.is_success(), is_success, "{reason:?} success mismatch");
+        assert_eq!(
+            reason.triggers_chaos_mode(),
+            triggers_chaos,
+            "{reason:?} chaos flag mismatch"
+        );
+    }
+}
