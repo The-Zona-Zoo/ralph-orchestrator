@@ -1026,7 +1026,7 @@ mod tests {
 
     impl CwdGuard {
         fn set(path: &Path) -> Self {
-            let original = std::env::current_dir().expect("current dir");
+            let original = safe_current_dir();
             std::env::set_current_dir(path).expect("set current dir");
             Self { original }
         }
@@ -1036,6 +1036,14 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::env::set_current_dir(&self.original);
         }
+    }
+
+    fn safe_current_dir() -> PathBuf {
+        std::env::current_dir().unwrap_or_else(|_| {
+            let fallback = std::env::temp_dir();
+            std::env::set_current_dir(&fallback).expect("set fallback cwd");
+            fallback
+        })
     }
 
     #[test]
@@ -1217,8 +1225,8 @@ mod tests {
     #[test]
     fn test_save_robot_config_with_token_writes_bot_token() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let prev_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(temp_dir.path()).unwrap();
+        let _lock = test_lock();
+        let _cwd = CwdGuard::set(temp_dir.path());
 
         save_robot_config(300, Some("test-token")).unwrap();
 
@@ -1231,7 +1239,6 @@ mod tests {
             .and_then(|v| v.as_str());
         assert_eq!(token, Some("test-token"));
 
-        std::env::set_current_dir(prev_dir).unwrap();
     }
 
     #[test]

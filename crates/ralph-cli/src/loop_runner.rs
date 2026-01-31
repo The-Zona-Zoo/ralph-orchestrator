@@ -16,6 +16,7 @@ use ralph_core::{
 };
 use ralph_proto::{Event, HatId};
 use ralph_tui::Tui;
+use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::io::{BufWriter, IsTerminal, stdin, stdout};
 use std::path::{Path, PathBuf};
@@ -1371,8 +1372,8 @@ fn log_terminate_event(logger: &mut EventLogger, iteration: u32, event: &Event) 
 }
 
 /// Gets the last commit info (short SHA and subject) for the summary file.
-fn get_last_commit_info() -> Option<String> {
-    let output = Command::new("git")
+fn get_last_commit_info_with_cmd(git_cmd: &OsStr) -> Option<String> {
+    let output = Command::new(git_cmd)
         .args(["log", "-1", "--format=%h: %s"])
         .output()
         .ok()?;
@@ -1383,6 +1384,10 @@ fn get_last_commit_info() -> Option<String> {
     } else {
         None
     }
+}
+
+fn get_last_commit_info() -> Option<String> {
+    get_last_commit_info_with_cmd(OsStr::new("git"))
 }
 
 /// Resolves prompt content with proper precedence.
@@ -1537,7 +1542,7 @@ fn check_planning_session_responses_for_session(
 ///
 /// Called when the primary loop completes successfully. Spawns merge-ralph
 /// processes for each queued loop in FIFO order.
-fn process_pending_merges(repo_root: &Path) {
+fn process_pending_merges_with_command(repo_root: &Path, ralph_cmd: &OsStr) {
     let queue = MergeQueue::new(repo_root);
 
     // Get all pending merges
@@ -1584,7 +1589,7 @@ fn process_pending_merges(repo_root: &Path) {
 
         info!(loop_id = %loop_id, "Spawning merge-ralph process");
 
-        match Command::new("ralph")
+        match Command::new(ralph_cmd)
             .current_dir(repo_root)
             .args([
                 "run",
@@ -1614,6 +1619,10 @@ fn process_pending_merges(repo_root: &Path) {
             }
         }
     }
+}
+
+fn process_pending_merges(repo_root: &Path) {
+    process_pending_merges_with_command(repo_root, OsStr::new("ralph"));
 }
 
 /// Public wrapper for CLI invocation of process_pending_merges.
@@ -1715,6 +1724,7 @@ mod tests {
     use ralph_core::HatRegistry;
     use ralph_core::planning_session::{ConversationEntry, ConversationType};
     use ralph_proto::{Hat, Topic};
+    use std::ffi::OsStr;
     use std::sync::Mutex;
 
     #[test]
@@ -1746,6 +1756,48 @@ mod tests {
             interactive_with_tty,
             "Interactive mode with TTY should forward user input"
         );
+    }
+
+    #[cfg(unix)]
+    fn write_fake_executable(dir: &Path, name: &str, body: &str) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join(name);
+        let script = format!("#!/bin/sh\n{}\n", body);
+        std::fs::write(&path, script).expect("write script");
+        let mut perms = std::fs::metadata(&path).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&path, perms).expect("chmod");
+        path
+    }
+
+    #[cfg(unix)]
+    struct CwdGuard {
+        original: std::path::PathBuf,
+    }
+
+    #[cfg(unix)]
+    impl CwdGuard {
+        fn set(path: &Path) -> Self {
+            let original = safe_current_dir();
+            std::env::set_current_dir(path).expect("set cwd");
+            Self { original }
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for CwdGuard {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.original);
+        }
+    }
+
+    #[cfg(unix)]
+    fn safe_current_dir() -> std::path::PathBuf {
+        std::env::current_dir().unwrap_or_else(|_| {
+            let fallback = std::env::temp_dir();
+            std::env::set_current_dir(&fallback).expect("set fallback cwd");
+            fallback
+        })
     }
 
     #[test]
@@ -1831,6 +1883,91 @@ mod tests {
             Some(TerminationReason::Interrupted),
             "ForceKill should terminate in autonomous mode"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_get_last_commit_info_returns_none_without_git() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let _cwd = CwdGuard::set(temp_dir.path());
+        let missing_git = temp_dir.path().join("git");
+        assert!(get_last_commit_info_with_cmd(missing_git.as_os_str()).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_get_last_commit_info_reads_last_commit() {
+        if Command::new("git").arg("--version").output().is_err() {
+            return;
+        }
+
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let repo_root = temp_dir.path();
+
+        Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(repo_root)
+            .status()
+            .expect("git init");
+
+        std::fs::write(repo_root.join("README.md"), "hello").expect("write file");
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(repo_root)
+            .status()
+            .expect("git add");
+
+        Command::new("git")
+            .args([
+                "-c",
+                "user.name=Test User",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-m",
+                "Initial commit",
+                "--quiet",
+            ])
+            .current_dir(repo_root)
+            .status()
+            .expect("git commit");
+
+        let _cwd = CwdGuard::set(repo_root);
+        let info = get_last_commit_info_with_cmd(OsStr::new("git")).expect("commit info");
+        assert!(
+            info.contains("Initial commit"),
+            "unexpected commit info: {info}"
+        );
+    }
+
+    #[test]
+    fn test_process_pending_merges_handles_missing_preset() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let repo_root = temp_dir.path();
+        std::fs::create_dir_all(repo_root.join(".ralph/merge-queue")).expect("queue dir");
+
+        process_pending_merges(repo_root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_process_pending_merges_spawns_for_queue_entry() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let repo_root = temp_dir.path();
+        std::fs::create_dir_all(repo_root.join(".ralph/merge-queue")).expect("queue dir");
+
+        let queue_file = repo_root.join(".ralph/merge-queue/loop-1234.json");
+        std::fs::write(
+            &queue_file,
+            r#"{"loop_id":"1234","state":"queued","created_at":"2026-01-01T00:00:00Z"}"#,
+        )
+        .expect("queue file");
+
+        let bin_dir = repo_root.join("bin");
+        std::fs::create_dir_all(&bin_dir).expect("bin dir");
+        let ralph_path = write_fake_executable(&bin_dir, "ralph", "exit 0");
+
+        process_pending_merges_with_command(repo_root, ralph_path.as_os_str());
     }
 
     #[test]

@@ -2568,10 +2568,13 @@ fn test_persistent_mode_suppresses_loop_complete() {
     let mut event_loop = EventLoop::new(config);
     event_loop.initialize("Test");
 
-    let hat_id = HatId::new("ralph");
+    let events_path = temp_dir.path().join("events.jsonl");
+    event_loop.event_reader = crate::event_reader::EventReader::new(&events_path);
 
     // LOOP_COMPLETE should NOT terminate in persistent mode
-    let reason = event_loop.process_output(&hat_id, "Done! LOOP_COMPLETE", true);
+    write_event_to_jsonl(&events_path, "LOOP_COMPLETE", "Done");
+    let _ = event_loop.process_events_from_jsonl();
+    let reason = event_loop.check_completion_event();
     assert_eq!(
         reason, None,
         "Persistent mode should suppress LOOP_COMPLETE termination"
@@ -2608,10 +2611,13 @@ fn test_non_persistent_mode_terminates_on_loop_complete() {
     let mut event_loop = EventLoop::new(config);
     event_loop.initialize("Test");
 
-    let hat_id = HatId::new("ralph");
+    let events_path = temp_dir.path().join("events.jsonl");
+    event_loop.event_reader = crate::event_reader::EventReader::new(&events_path);
 
     // LOOP_COMPLETE should terminate normally when not persistent
-    let reason = event_loop.process_output(&hat_id, "Done! LOOP_COMPLETE", true);
+    write_event_to_jsonl(&events_path, "LOOP_COMPLETE", "Done");
+    let _ = event_loop.process_events_from_jsonl();
+    let reason = event_loop.check_completion_event();
     assert_eq!(
         reason,
         Some(TerminationReason::CompletionPromise),

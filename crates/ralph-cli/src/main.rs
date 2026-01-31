@@ -177,6 +177,18 @@ impl Verbosity {
     /// 3. Config file: (if supported in future)
     /// 4. Default: Normal
     fn resolve(cli_verbose: bool, cli_quiet: bool) -> Self {
+        let env_quiet = std::env::var("RALPH_QUIET").is_ok();
+        let env_verbose = std::env::var("RALPH_VERBOSE").is_ok();
+        Self::resolve_with_env(cli_verbose, cli_quiet, env_quiet, env_verbose)
+    }
+
+    #[allow(clippy::fn_params_excessive_bools)]
+    fn resolve_with_env(
+        cli_verbose: bool,
+        cli_quiet: bool,
+        env_quiet: bool,
+        env_verbose: bool,
+    ) -> Self {
         // CLI flags take precedence
         if cli_quiet {
             return Verbosity::Quiet;
@@ -186,10 +198,10 @@ impl Verbosity {
         }
 
         // Environment variables
-        if std::env::var("RALPH_QUIET").is_ok() {
+        if env_quiet {
             return Verbosity::Quiet;
         }
-        if std::env::var("RALPH_VERBOSE").is_ok() {
+        if env_verbose {
             return Verbosity::Verbose;
         }
 
@@ -2058,6 +2070,14 @@ fn list_directory_contents(path: &Path, use_colors: bool, indent: usize) -> Resu
 mod tests {
     use super::*;
 
+    fn safe_current_dir() -> std::path::PathBuf {
+        std::env::current_dir().unwrap_or_else(|_| {
+            let fallback = std::env::temp_dir();
+            std::env::set_current_dir(&fallback).expect("set fallback cwd");
+            fallback
+        })
+    }
+
     #[test]
     fn test_verbosity_cli_quiet() {
         assert_eq!(Verbosity::resolve(false, true), Verbosity::Quiet);
@@ -2071,6 +2091,28 @@ mod tests {
     #[test]
     fn test_verbosity_default() {
         assert_eq!(Verbosity::resolve(false, false), Verbosity::Normal);
+    }
+
+    #[test]
+    fn test_verbosity_env_quiet() {
+        assert_eq!(
+            Verbosity::resolve_with_env(false, false, true, false),
+            Verbosity::Quiet
+        );
+    }
+
+    #[test]
+    fn test_verbosity_env_verbose() {
+        assert_eq!(
+            Verbosity::resolve_with_env(false, false, false, true),
+            Verbosity::Verbose
+        );
+    }
+
+    #[test]
+    fn test_color_mode_should_use_colors() {
+        assert!(ColorMode::Always.should_use_colors());
+        assert!(!ColorMode::Never.should_use_colors());
     }
 
     #[test]
@@ -2604,10 +2646,7 @@ core:
         let config = load_config_with_overrides(&sources).unwrap();
 
         assert_eq!(config.core.scratchpad, ".custom/scratch.md");
-        assert_eq!(
-            config.core.workspace_root,
-            std::env::current_dir().unwrap()
-        );
+        assert_eq!(config.core.workspace_root, safe_current_dir());
     }
 
     #[test]

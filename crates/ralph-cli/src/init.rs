@@ -211,6 +211,14 @@ mod tests {
 
     static CWD_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
+    fn safe_current_dir() -> std::path::PathBuf {
+        std::env::current_dir().unwrap_or_else(|_| {
+            let fallback = std::env::temp_dir();
+            std::env::set_current_dir(&fallback).expect("set fallback cwd");
+            fallback
+        })
+    }
+
     #[test]
     fn test_generate_template_claude() {
         let template = generate_template("claude");
@@ -263,7 +271,7 @@ mod tests {
             .lock()
             .expect("cwd lock poisoned");
 
-        let original_dir = std::env::current_dir().expect("get current dir");
+        let original_dir = safe_current_dir();
         let _restore = RestoreDir(original_dir);
 
         let temp_dir = TempDir::new().expect("create temp dir");
