@@ -984,6 +984,20 @@ fn resolve_loop(cwd: &std::path::Path, id: &str) -> Result<(String, Option<Strin
         return Ok((entry.loop_id.clone(), wt_path));
     }
 
+    // Try partial match in merge queue
+    if let Ok(entries) = merge_queue.list() {
+        for entry in entries {
+            if entry.loop_id.ends_with(id) || entry.loop_id.contains(id) {
+                let worktrees = list_ralph_worktrees(cwd).unwrap_or_default();
+                let wt_path = worktrees
+                    .iter()
+                    .find(|wt| wt.branch.ends_with(&entry.loop_id))
+                    .map(|wt| wt.path.to_string_lossy().to_string());
+                return Ok((entry.loop_id.clone(), wt_path));
+            }
+        }
+    }
+
     // Try worktrees directly
     let worktrees = list_ralph_worktrees(cwd).unwrap_or_default();
     for wt in worktrees {
@@ -1119,11 +1133,81 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_loop_partial_match_merge_queue_suffix() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let _cwd = CwdGuard::set(temp_dir.path());
+
+        let queue = MergeQueue::new(temp_dir.path());
+        queue
+            .enqueue("loop-queue-5678", "merge prompt")
+            .expect("enqueue");
+
+        let (id, worktree) = resolve_loop(temp_dir.path(), "5678").expect("resolve");
+        assert_eq!(id, "loop-queue-5678");
+        assert_eq!(worktree, None);
+    }
+
+    #[test]
     fn test_resolve_loop_missing_returns_error() {
         let temp_dir = tempfile::tempdir().expect("temp dir");
         let _cwd = CwdGuard::set(temp_dir.path());
 
         let err = resolve_loop(temp_dir.path(), "does-not-exist").unwrap_err();
         assert!(err.to_string().contains("not found"));
+    }
+
+    #[test]
+    fn test_list_loops_handles_merge_queue_states() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let _cwd = CwdGuard::set(temp_dir.path());
+
+        let queue = MergeQueue::new(temp_dir.path());
+        queue
+            .enqueue("loop-review-1234", "merge prompt")
+            .expect("enqueue");
+        queue
+            .mark_merging("loop-review-1234", 4242)
+            .expect("mark merging");
+        queue
+            .mark_needs_review("loop-review-1234", "conflicts")
+            .expect("needs review");
+
+        queue
+            .enqueue("loop-merged-5678", "merge prompt")
+            .expect("enqueue");
+        queue
+            .mark_merging("loop-merged-5678", 9001)
+            .expect("mark merging");
+        queue
+            .mark_merged("loop-merged-5678", "abc123")
+            .expect("merged");
+
+        list_loops(
+            ListArgs {
+                json: false,
+                all: false,
+            },
+            false,
+        )
+        .expect("list loops");
+    }
+
+    #[test]
+    fn test_get_merge_button_state_blocked_when_merging() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let _cwd = CwdGuard::set(temp_dir.path());
+
+        let queue = MergeQueue::new(temp_dir.path());
+        queue
+            .enqueue("loop-merge-9999", "merge prompt")
+            .expect("enqueue");
+        queue
+            .mark_merging("loop-merge-9999", 4242)
+            .expect("mark merging");
+
+        get_merge_button_state(MergeButtonStateArgs {
+            loop_id: "loop-merge-9999".to_string(),
+        })
+        .expect("merge button state");
     }
 }
