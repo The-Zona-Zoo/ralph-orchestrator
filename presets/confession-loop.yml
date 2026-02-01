@@ -26,6 +26,7 @@ core:
     - "You MUST NOT output LOOP_COMPLETE unless the Confession phase is clean and confidence >= 80."
     - "You MUST NOT print LOOP_COMPLETE inside examples or templates."
     - "You MUST NOT close tasks unless you are the Confession Handler."
+    - "Confidence protocol: score decisions 0-100. >80 proceed autonomously; 50-80 proceed + document in .ralph/agent/decisions.md; <50 choose safe default + document."
 
 events:
   build.task.abandoned:

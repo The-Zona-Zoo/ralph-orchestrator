@@ -102,11 +102,26 @@ ralph tools memory delete <mem-id>
 - You make or learn why an architectural choice was made (decision)
 - You solve a problem that might recur (fix)
 - You learn project-specific knowledge others need (context)
+- Any non-zero command, missing dependency/skill, or blocked step (fix + task if unresolved)
 
 **Do NOT create memories for:**
 - Session-specific state (use tasks instead)
 - Obvious/universal practices
 - Temporary workarounds
+
+### Failure Capture (Generic Rule)
+
+If any command fails (non-zero exit), or you hit a missing dependency/skill, or you are blocked:
+1. **Record a fix memory** with the exact command, error, and intended fix.
+2. **Open a task** if it won't be resolved in the same iteration.
+
+```bash
+ralph tools memory add \
+  "failure: cmd=<command>, exit=<code>, error=<message>, next=<intended fix>" \
+  -t fix --tags tooling,error-handling
+
+ralph tools task add "Fix: <short description>" -p 2
+```
 
 ### Discover Available Tags
 
@@ -134,6 +149,11 @@ Reuse existing tags for consistency. Common tag patterns:
 Use `.ralph/agent/decisions.md` to capture consequential decisions and their
 confidence scores. Follow the template at the top of the file and keep IDs
 sequential (DEC-001, DEC-002, ...).
+
+Confidence thresholds:
+- **>80**: Proceed autonomously.
+- **50-80**: Proceed, but document the decision in `.ralph/agent/decisions.md`.
+- **<50**: Choose the safest default and document the decision in `.ralph/agent/decisions.md`.
 
 Template fields:
 - Decision

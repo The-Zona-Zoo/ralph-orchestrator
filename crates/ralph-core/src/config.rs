@@ -671,6 +671,7 @@ fn default_guardrails() -> Vec<String> {
         "Fresh context each iteration - scratchpad is memory".to_string(),
         "Don't assume 'not implemented' - search first".to_string(),
         "Backpressure is law - tests/typecheck/lint/audit must pass".to_string(),
+        "Confidence protocol: score decisions 0-100. >80 proceed autonomously; 50-80 proceed + document in .ralph/agent/decisions.md; <50 choose safe default + document".to_string(),
         "Commit atomically - one logical change per commit, capture the why".to_string(),
     ]
 }
@@ -1856,11 +1857,12 @@ hats:
         assert_eq!(config.core.scratchpad, ".ralph/agent/scratchpad.md");
         assert_eq!(config.core.specs_dir, ".ralph/specs/");
         // Default guardrails per spec
-        assert_eq!(config.core.guardrails.len(), 4);
+        assert_eq!(config.core.guardrails.len(), 5);
         assert!(config.core.guardrails[0].contains("Fresh context"));
         assert!(config.core.guardrails[1].contains("search first"));
         assert!(config.core.guardrails[2].contains("Backpressure"));
-        assert!(config.core.guardrails[3].contains("Commit atomically"));
+        assert!(config.core.guardrails[3].contains("Confidence protocol"));
+        assert!(config.core.guardrails[4].contains("Commit atomically"));
     }
 
     #[test]
@@ -1874,7 +1876,7 @@ core:
         assert_eq!(config.core.scratchpad, ".workspace/plan.md");
         assert_eq!(config.core.specs_dir, "./specifications/");
         // Guardrails should use defaults when not specified
-        assert_eq!(config.core.guardrails.len(), 4);
+        assert_eq!(config.core.guardrails.len(), 5);
     }
 
     #[test]

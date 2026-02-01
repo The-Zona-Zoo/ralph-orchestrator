@@ -40,6 +40,7 @@ core:
     - "Verification is mandatory — tests/typecheck/lint/audit must pass"
     - "YAGNI ruthlessly — no speculative features"
     - "KISS always — simplest solution that works"
+    - "Confidence protocol: score decisions 0-100. >80 proceed autonomously; 50-80 proceed + document in .ralph/agent/decisions.md; <50 choose safe default + document."
 
 hats:
   planner:
@@ -176,12 +177,11 @@ hats:
       When you encounter ambiguity or must choose between approaches:
 
       1. **Score your confidence** on the decision (0-100):
-         - **90-100**: Near-certain. Evidence is clear. Proceed.
-         - **70-89**: Confident. Reasonable evidence. Proceed and note assumption.
-         - **50-69**: Uncertain. Multiple valid approaches. Choose safest default, document why.
-         - **Below 50**: Low confidence. Choose the most reversible option, document heavily.
+         - **>80**: Proceed autonomously.
+         - **50-80**: Proceed, but document the decision in `.ralph/agent/decisions.md`.
+         - **<50**: Choose the safest default and document the decision in `.ralph/agent/decisions.md`.
 
-      2. **Choose the safe default** (when confidence < 70):
+      2. **Choose the safe default** (when confidence < 50):
          - Prefer **reversible** over irreversible actions
          - Prefer **additive** over destructive changes (add new code > modify existing)
          - Prefer **narrow scope** over broad changes
@@ -191,7 +191,7 @@ hats:
       3. **Document the decision:**
          - Append a structured entry to `.ralph/agent/decisions.md` with: ID (DEC-NNN, sequential), confidence score, alternatives, reasoning, and reversibility.
          - Briefly note the decision in your scratchpad for iteration context.
-         - Only journal decisions where confidence < 90 and the choice has observable consequences.
+         - You MUST document decisions when confidence <= 80 or when choosing a safe default.
 
       4. **Never block on human input** for implementation decisions.
          - `interact.human` is reserved for scope/direction questions from the Chief of Staff only.
@@ -286,12 +286,11 @@ hats:
       When you encounter ambiguity or must choose between approaches:
 
       1. **Score your confidence** on the decision (0-100):
-         - **90-100**: Near-certain. Evidence is clear. Proceed.
-         - **70-89**: Confident. Reasonable evidence. Proceed and note assumption.
-         - **50-69**: Uncertain. Multiple valid approaches. Choose safest default, document why.
-         - **Below 50**: Low confidence. Choose the most reversible option, document heavily.
+         - **>80**: Proceed autonomously.
+         - **50-80**: Proceed, but document the decision in `.ralph/agent/decisions.md`.
+         - **<50**: Choose the safest default and document the decision in `.ralph/agent/decisions.md`.
 
-      2. **Choose the safe default** (when confidence < 70):
+      2. **Choose the safe default** (when confidence < 50):
          - Prefer **reversible** over irreversible actions
          - Prefer **additive** over destructive changes (add new code > modify existing)
          - Prefer **narrow scope** over broad changes
@@ -301,7 +300,7 @@ hats:
       3. **Document the decision:**
          - Append a structured entry to `.ralph/agent/decisions.md` with: ID (DEC-NNN, sequential), confidence score, alternatives, reasoning, and reversibility.
          - Briefly note the decision in your scratchpad for iteration context.
-         - Only journal decisions where confidence < 90 and the choice has observable consequences.
+         - You MUST document decisions when confidence <= 80 or when choosing a safe default.
 
       4. **Never block on human input** for implementation decisions.
          - `interact.human` is reserved for scope/direction questions from the Chief of Staff only.
