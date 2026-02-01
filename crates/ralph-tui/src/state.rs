@@ -254,9 +254,18 @@ impl TuiState {
                 // Save state we want to preserve across reset
                 let saved_hat_map = std::mem::take(&mut self.hat_map);
                 let saved_loop_started = self.loop_started; // Preserve timer from TUI init
+                // Preserve iteration buffers so TUI history survives across task restarts
+                let saved_iterations = std::mem::take(&mut self.iterations);
+                let saved_current_view = self.current_view;
+                let saved_following_latest = self.following_latest;
+                let saved_new_iteration_alert = self.new_iteration_alert.take();
                 *self = Self::new();
                 self.hat_map = saved_hat_map;
                 self.loop_started = saved_loop_started; // Keep original timer
+                self.iterations = saved_iterations;
+                self.current_view = saved_current_view;
+                self.following_latest = saved_following_latest;
+                self.new_iteration_alert = saved_new_iteration_alert;
                 self.pending_hat = Some((HatId::new("planner"), "📋Planner".to_string()));
                 self.last_event = Some(topic.to_string());
                 self.last_event_at = Some(now);
@@ -1105,6 +1114,45 @@ mod tests {
             state.get_pending_hat_display(),
             "📋Planner",
             "Unknown topics should not clear pending_hat"
+        );
+    }
+
+    #[test]
+    fn task_start_preserves_iterations_across_reset() {
+        // Regression test: task.start used to do *self = Self::new() which wiped
+        // iteration buffers, causing the header to show "iter 1/0" and losing all
+        // previous iteration output.
+        let mut state = TuiState::new();
+
+        // Create 3 iterations with content
+        state.start_new_iteration();
+        state.start_new_iteration();
+        state.start_new_iteration();
+        assert_eq!(state.total_iterations(), 3);
+        assert_eq!(state.current_view, 2); // following latest
+
+        // Navigate back to review history
+        state.navigate_prev();
+        assert_eq!(state.current_view, 1);
+        assert!(!state.following_latest);
+
+        // When task.start fires (e.g., new task planning session)
+        let event = Event::new("task.start", "New task");
+        state.update(&event);
+
+        // Then iterations are preserved
+        assert_eq!(
+            state.total_iterations(),
+            3,
+            "task.start should not wipe iteration buffers"
+        );
+        assert_eq!(
+            state.current_view, 1,
+            "task.start should preserve current_view position"
+        );
+        assert!(
+            !state.following_latest,
+            "task.start should preserve following_latest state"
         );
     }
 
