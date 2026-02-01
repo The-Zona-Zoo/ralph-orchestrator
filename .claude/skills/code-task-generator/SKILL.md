@@ -15,7 +15,7 @@ This sop generates structured code task files from rough descriptions, ideas, or
 
 - **input** (required): Task description, file path, or PDD plan path. Can be a simple sentence, paragraph, detailed explanation, or path to a PDD implementation plan.
 - **step_number** (optional): For PDD plans only - specific step to process. If not provided, automatically determines the next uncompleted step from the checklist.
-- **output_dir** (optional, default: ".ralph/tasks/"): Directory where the code task file will be created
+- **output_dir** (optional, default: "specs/{task_name}/tasks/"): Directory where the code task files will be created. The `{task_name}` is derived from the input as a kebab-case identifier. This default aligns output with Ralph's spec-driven pipeline so code tasks feed directly into `ralph run --config presets/spec-driven.yml` or `ralph run --config presets/pdd-to-code-assist.yml`.
 - **task_name** (optional): For descriptions only - specific task name. If not provided, will be generated from the description.
 
 **Constraints for parameter acquisition:**
@@ -86,9 +86,9 @@ Create appropriate file structure based on mode and approved plan.
 - For PDD mode: You MUST create a folder named `step{NN}` where NN is zero-padded (e.g., step01, step02, step10)
 - For PDD mode: You MUST create multiple code task files within the step folder, named sequentially: `task-01-{title}.code-task.md`, `task-02-{title}.code-task.md`, etc.
 - For PDD mode: You MUST break down the step into logical implementation phases focusing on functional components, NOT separate testing tasks
-- For PDD mode: You MUST include "Reference Documentation" section with path to design/detailed-design.md as required reading
+- For PDD mode: You MUST include "Reference Documentation" section with path to design.md as required reading
 - For PDD mode: You MUST include specific research documents in "Additional References" only if they are directly relevant to the task (e.g., specific technology research for that component)
-- For PDD mode: You MUST add a note instructing agents to read the detailed design before implementation
+- For PDD mode: You MUST add a note instructing agents to read the design document before implementation
 - For description mode: You MUST create single task or multiple tasks as planned
 - You MUST add YAML frontmatter with `status: pending`, `created: <current date in YYYY-MM-DD format>`, `started: null`, `completed: null`
 - You MUST generate task names using kebab-case format
@@ -114,16 +114,20 @@ Inform user about generated tasks and next steps.
 
 ### 7. Offer Ralph Integration
 
-After generating code tasks, offer to create a PROMPT.md file for Ralph.
+After generating code tasks, offer to set up Ralph for autonomous implementation.
 
 **Constraints:**
-- You MUST ask the user: "Would you like me to create a PROMPT.md for Ralph to implement these tasks?"
+- You MUST ask the user: "Would you like me to set up Ralph to implement these tasks autonomously?"
 - If the user agrees, You MUST create a minimal PROMPT.md file containing:
   - A clear objective statement (what to implement)
-  - Reference to the generated code task files
-  - Suggested execution order
-  - Brief acceptance criteria
+  - Reference to the spec directory: `specs/{task_name}/`
+  - Suggested execution order for code tasks
+  - Brief acceptance criteria (Given-When-Then format)
 - The PROMPT.md should be concise - Ralph will read the task files for details
+- You MUST suggest the appropriate Ralph command to run:
+  - For full autonomous pipeline: `ralph run --config presets/pdd-to-code-assist.yml`
+  - For simpler spec-driven flow: `ralph run --config presets/spec-driven.yml`
+- You MUST explain that the spec-driven presets will autonomously: implement (TDD) → validate → commit
 - If the user declines, You SHOULD acknowledge and conclude the session
 
 ## Code Task Format Specification
@@ -147,12 +151,12 @@ completed: null
 
 ## Reference Documentation
 **Required:**
-- Design: [path to detailed design document]
+- Design: specs/{task_name}/design.md
 
 **Additional References (if relevant to this task):**
 - [Specific research document or section]
 
-**Note:** You MUST read the detailed design document before beginning implementation. Read additional references as needed for context.
+**Note:** You MUST read the design document before beginning implementation. Read additional references as needed for context.
 
 ## Technical Requirements
 1. [First requirement]
@@ -204,12 +208,12 @@ The application currently accepts any string as an email address, leading to dat
 
 ## Reference Documentation
 **Required:**
-- Design: planning/design/detailed-design.md
+- Design: specs/email-validator/design.md
 
 **Additional References (if relevant to this task):**
-- planning/research/validation-libraries.md (for email validation approach)
+- specs/email-validator/research/validation-libraries.md (for email validation approach)
 
-**Note:** You MUST read the detailed design document before beginning implementation. Read additional references as needed for context.
+**Note:** You MUST read the design document before beginning implementation. Read additional references as needed for context.
 
 ## Technical Requirements
 1. Create a function that accepts an email string and returns validation results
@@ -267,37 +271,40 @@ The application currently accepts any string as an email address, leading to dat
 ### Example Input (Description Mode)
 ```
 input: "I need a function that validates email addresses and returns detailed error messages"
-output_dir: ".ralph/tasks/"
 ```
 
 ### Example Output (Description Mode)
 ```
 Detected mode: description
 
-Generated code task: .ralph/tasks/email-validator.code-task.md
+Generated code task: specs/email-validator/tasks/email-validator.code-task.md
 
 Created task for email validation functionality with comprehensive acceptance criteria and implementation guidance.
 
-Next steps: Run code-assist on the generated task to implement the solution.
+Next steps:
+- Run code-assist on the generated task, or
+- Run Ralph autonomously: ralph run --config presets/spec-driven.yml
 ```
 
 ### Example Input (PDD Mode)
 ```
-input: "planning/implementation/plan.md"
+input: "specs/data-pipeline/plan.md"
 ```
 
 ### Example Output (PDD Mode)
 ```
 Detected mode: pdd
 
-Generated code tasks for step 2: planning/implementation/step02/
+Generated code tasks for step 2: specs/data-pipeline/tasks/step02/
 
 Created tasks:
 - task-01-create-data-models.code-task.md
-- task-02-implement-validation.code-task.md  
+- task-02-implement-validation.code-task.md
 - task-03-add-serialization.code-task.md
 
-Next steps: Run code-assist on each task in sequence
+Next steps:
+- Run code-assist on each task in sequence, or
+- Run Ralph autonomously: ralph run --config presets/pdd-to-code-assist.yml
 
 Step demo: Working data models with validation that can create, validate, and serialize/deserialize data objects
 ```
