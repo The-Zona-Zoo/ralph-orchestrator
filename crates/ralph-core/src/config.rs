@@ -139,10 +139,6 @@ fn default_true() -> bool {
     true
 }
 
-fn default_false() -> bool {
-    false
-}
-
 #[allow(clippy::derivable_impls)] // Cannot derive due to serde default functions
 impl Default for RalphConfig {
     fn default() -> Self {
@@ -326,6 +322,20 @@ impl RalphConfig {
             );
             self.event_loop.max_cost_usd = self.max_cost;
             normalized_count += 1;
+        }
+
+        // Merge extra_instructions into instructions for each hat
+        for (hat_id, hat) in &mut self.hats {
+            if !hat.extra_instructions.is_empty() {
+                for fragment in hat.extra_instructions.drain(..) {
+                    if !hat.instructions.ends_with('\n') {
+                        hat.instructions.push('\n');
+                    }
+                    hat.instructions.push_str(&fragment);
+                }
+                debug!(hat = %hat_id, "Merged extra_instructions into hat instructions");
+                normalized_count += 1;
+            }
         }
 
         if normalized_count > 0 {
@@ -990,10 +1000,10 @@ pub struct SkillOverride {
 }
 
 /// Preflight check configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PreflightConfig {
     /// Whether to run preflight checks before `ralph run`.
-    #[serde(default = "default_false")]
+    #[serde(default)]
     pub enabled: bool,
 
     /// Whether to treat warnings as failures.
@@ -1003,16 +1013,6 @@ pub struct PreflightConfig {
     /// Specific checks to skip (by name). Empty = run all checks.
     #[serde(default)]
     pub skip: Vec<String>,
-}
-
-impl Default for PreflightConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            strict: false,
-            skip: Vec::new(),
-        }
-    }
 }
 
 /// Feature flags for optional Ralph capabilities.
@@ -1219,6 +1219,25 @@ pub struct HatConfig {
     /// Instructions prepended to prompts.
     #[serde(default)]
     pub instructions: String,
+
+    /// Additional instruction fragments appended to `instructions`.
+    ///
+    /// Use with YAML anchors to share common instruction blocks across hats:
+    /// ```yaml
+    /// _confidence_protocol: &confidence_protocol |
+    ///   ### Confidence-Based Decision Protocol
+    ///   ...
+    ///
+    /// hats:
+    ///   architect:
+    ///     instructions: |
+    ///       ## ARCHITECT MODE
+    ///       ...
+    ///     extra_instructions:
+    ///       - *confidence_protocol
+    /// ```
+    #[serde(default)]
+    pub extra_instructions: Vec<String>,
 
     /// Backend to use for this hat (inherits from cli.backend if not specified).
     #[serde(default)]
@@ -2535,5 +2554,54 @@ RObot:
             "Expected bot_token validation failure, got: {:?}",
             err
         );
+    }
+
+    #[test]
+    fn test_extra_instructions_merged_during_normalize() {
+        let yaml = r#"
+_fragments:
+  shared_protocol: &shared_protocol |
+    ### Shared Protocol
+    Follow this protocol.
+
+hats:
+  builder:
+    name: "Builder"
+    triggers: ["build.start"]
+    instructions: |
+      ## BUILDER MODE
+      Build things.
+    extra_instructions:
+      - *shared_protocol
+"#;
+        let mut config: RalphConfig = serde_yaml::from_str(yaml).unwrap();
+        let hat = config.hats.get("builder").unwrap();
+
+        // Before normalize: extra_instructions has content, instructions does not include it
+        assert_eq!(hat.extra_instructions.len(), 1);
+        assert!(!hat.instructions.contains("Shared Protocol"));
+
+        config.normalize();
+
+        let hat = config.hats.get("builder").unwrap();
+        // After normalize: extra_instructions drained, instructions includes the fragment
+        assert!(hat.extra_instructions.is_empty());
+        assert!(hat.instructions.contains("## BUILDER MODE"));
+        assert!(hat.instructions.contains("### Shared Protocol"));
+        assert!(hat.instructions.contains("Follow this protocol."));
+    }
+
+    #[test]
+    fn test_extra_instructions_empty_by_default() {
+        let yaml = r#"
+hats:
+  simple:
+    name: "Simple"
+    triggers: ["start"]
+    instructions: "Do the thing."
+"#;
+        let config: RalphConfig = serde_yaml::from_str(yaml).unwrap();
+        let hat = config.hats.get("simple").unwrap();
+        assert!(hat.extra_instructions.is_empty());
     }
 }

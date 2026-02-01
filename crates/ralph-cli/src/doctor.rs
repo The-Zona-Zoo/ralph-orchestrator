@@ -611,6 +611,7 @@ mod tests {
             triggers: vec!["work.start".to_string()],
             publishes: vec![],
             instructions: String::new(),
+            extra_instructions: vec![],
             backend,
             default_publishes: None,
             max_activations: None,
