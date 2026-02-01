@@ -2722,4 +2722,56 @@ core:
         print_preflight_summary(&report, true, "Preflight: ", true);
         print_preflight_summary(&report, false, "Preflight: ", false);
     }
+
+    fn default_run_args() -> RunArgs {
+        RunArgs {
+            prompt_text: None,
+            backend: Some("claude".to_string()),
+            prompt_file: None,
+            max_iterations: None,
+            completion_promise: None,
+            dry_run: false,
+            continue_mode: false,
+            no_tui: true,
+            autonomous: false,
+            idle_timeout: None,
+            exclusive: false,
+            no_auto_merge: false,
+            chaos: false,
+            chaos_max_iterations: None,
+            skip_preflight: true,
+            verbose: false,
+            quiet: false,
+            record_session: None,
+            custom_args: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_run_command_continue_missing_scratchpad_returns_error() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let _cwd = CwdGuard::set(temp_dir.path());
+
+        let mut args = default_run_args();
+        args.continue_mode = true;
+
+        let err = run_command(&[], false, ColorMode::Never, args)
+            .await
+            .expect_err("expected missing scratchpad error");
+        assert!(err.to_string().contains("scratchpad not found"));
+    }
+
+    #[tokio::test]
+    async fn test_run_command_dry_run_inline_prompt_skips_execution() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let _cwd = CwdGuard::set(temp_dir.path());
+
+        let mut args = default_run_args();
+        args.dry_run = true;
+        args.prompt_text = Some("Test inline prompt".to_string());
+
+        run_command(&[], false, ColorMode::Never, args)
+            .await
+            .expect("dry run should succeed");
+    }
 }
