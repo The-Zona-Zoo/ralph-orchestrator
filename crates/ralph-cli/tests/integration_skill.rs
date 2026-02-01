@@ -1,0 +1,59 @@
+//! Integration tests for `ralph tools skill` CLI commands.
+
+use std::process::Command;
+use tempfile::TempDir;
+
+fn ralph_skill(temp_path: &std::path::Path, args: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_ralph"))
+        .arg("tools")
+        .arg("skill")
+        .args(args)
+        .arg("--root")
+        .arg(temp_path)
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to execute ralph tools skill command")
+}
+
+fn ralph_skill_ok(temp_path: &std::path::Path, args: &[&str]) -> String {
+    let output = ralph_skill(temp_path, args);
+    assert!(
+        output.status.success(),
+        "Command 'ralph tools skill {}' failed: {}",
+        args.join(" "),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).to_string()
+}
+
+#[test]
+fn test_skill_load_builtin() {
+    let temp_dir = TempDir::new().expect("temp dir");
+    let temp_path = temp_dir.path();
+
+    let stdout = ralph_skill_ok(temp_path, &["load", "ralph-tools"]);
+    assert!(stdout.contains("Ralph Tools"));
+    assert!(stdout.contains("ralph tools task"));
+}
+
+#[test]
+fn test_skill_load_missing_exits_nonzero() {
+    let temp_dir = TempDir::new().expect("temp dir");
+    let temp_path = temp_dir.path();
+
+    let output = ralph_skill(temp_path, &["load", "missing-skill"]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("not found"));
+}
+
+#[test]
+fn test_skill_list_includes_builtins() {
+    let temp_dir = TempDir::new().expect("temp dir");
+    let temp_path = temp_dir.path();
+
+    let stdout = ralph_skill_ok(temp_path, &["list", "--format", "quiet"]);
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert!(lines.contains(&"ralph-tools"));
+    assert!(lines.contains(&"robot-interaction"));
+}

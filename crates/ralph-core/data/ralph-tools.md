@@ -49,6 +49,15 @@ ralph tools interact progress "message"
 
 Send a non-blocking progress update via the configured RObot (Telegram).
 
+## Skill Commands
+
+```bash
+ralph tools skill list
+ralph tools skill load <name>
+```
+
+List available skills or load a specific skill by name.
+
 ## Memory Commands
 
 ```bash
