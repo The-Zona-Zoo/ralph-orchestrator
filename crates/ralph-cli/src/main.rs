@@ -13,23 +13,23 @@
 //! - Work item tracking via `ralph task`
 
 mod bot;
-mod doctor;
 mod display;
+mod doctor;
 mod hats;
 mod init;
 mod interact;
 mod loop_runner;
 mod loops;
 mod memory;
-mod presets;
 mod preflight;
+mod presets;
 mod skill_cli;
 mod sop_runner;
 mod task_cli;
-mod tools;
-mod web;
 #[cfg(test)]
 mod test_support;
+mod tools;
+mod web;
 
 use anyhow::{Context, Result};
 use clap::{ArgAction, Parser, Subcommand, ValueEnum};
@@ -994,14 +994,18 @@ fn print_preflight_summary(
     };
 
     for check in &report.checks {
-        if check.status == CheckStatus::Fail && let Some(message) = &check.message {
+        if check.status == CheckStatus::Fail
+            && let Some(message) = &check.message
+        {
             emit(format!("  ✗ {}: {}", check.name, message));
         }
     }
 
     if verbose {
         for check in &report.checks {
-            if check.status == CheckStatus::Warn && let Some(message) = &check.message {
+            if check.status == CheckStatus::Warn
+                && let Some(message) = &check.message
+            {
                 emit(format!("  ⚠ {}: {}", check.name, message));
             }
         }
@@ -2029,11 +2033,7 @@ fn print_tutorial_step(index: usize, total: usize, step: &TutorialStep, use_colo
 
 fn prompt_to_continue(use_colors: bool) -> Result<()> {
     if use_colors {
-        print!(
-            "{}Press Enter to continue...{}",
-            colors::DIM,
-            colors::RESET
-        );
+        print!("{}Press Enter to continue...{}", colors::DIM, colors::RESET);
     } else {
         print!("Press Enter to continue...");
     }
@@ -2478,14 +2478,9 @@ mod tests {
         config.cli.backend = "custom".to_string();
         config.cli.command = Some("definitely-missing-12345".to_string());
 
-        let report = run_auto_preflight(
-            &config,
-            false,
-            false,
-            AutoPreflightMode::DryRun,
-        )
-        .await
-        .unwrap();
+        let report = run_auto_preflight(&config, false, false, AutoPreflightMode::DryRun)
+            .await
+            .unwrap();
 
         let report = report.expect("expected preflight report in dry-run mode");
         assert!(!report.passed);
@@ -2502,18 +2497,11 @@ mod tests {
         config.cli.backend = "custom".to_string();
         config.cli.command = Some("definitely-missing-12345".to_string());
 
-        let err = run_auto_preflight(
-            &config,
-            false,
-            false,
-            AutoPreflightMode::Run,
-        )
-        .await
-        .expect_err("expected preflight failure in run mode");
+        let err = run_auto_preflight(&config, false, false, AutoPreflightMode::Run)
+            .await
+            .expect_err("expected preflight failure in run mode");
 
-        assert!(err
-            .to_string()
-            .contains("Preflight checks failed"));
+        assert!(err.to_string().contains("Preflight checks failed"));
     }
 
     #[test]
@@ -2777,11 +2765,7 @@ core:
     fn test_load_config_with_overrides_applies_override_sources() {
         let temp_dir = tempfile::tempdir().unwrap();
         let config_path = temp_dir.path().join("ralph.yml");
-        std::fs::write(
-            &config_path,
-            "core:\n  scratchpad: .agent/scratchpad.md\n",
-        )
-        .unwrap();
+        std::fs::write(&config_path, "core:\n  scratchpad: .agent/scratchpad.md\n").unwrap();
 
         let sources = vec![
             ConfigSource::File(config_path),
@@ -2810,12 +2794,10 @@ core:
         let config = load_config_with_overrides(&sources).unwrap();
 
         assert_eq!(config.core.specs_dir, "custom-specs");
-        let expected_root =
-            std::fs::canonicalize(temp_dir.path()).unwrap_or_else(|_| temp_dir.path().to_path_buf());
-        let actual_root =
-            std::fs::canonicalize(&config.core.workspace_root).unwrap_or_else(|_| {
-                config.core.workspace_root.clone()
-            });
+        let expected_root = std::fs::canonicalize(temp_dir.path())
+            .unwrap_or_else(|_| temp_dir.path().to_path_buf());
+        let actual_root = std::fs::canonicalize(&config.core.workspace_root)
+            .unwrap_or_else(|_| config.core.workspace_root.clone());
         assert_eq!(actual_root, expected_root);
     }
 
@@ -2830,12 +2812,10 @@ core:
 
         let default = RalphConfig::default();
         assert_eq!(config.core.scratchpad, default.core.scratchpad);
-        let expected_root =
-            std::fs::canonicalize(temp_dir.path()).unwrap_or_else(|_| temp_dir.path().to_path_buf());
-        let actual_root =
-            std::fs::canonicalize(&config.core.workspace_root).unwrap_or_else(|_| {
-                config.core.workspace_root.clone()
-            });
+        let expected_root = std::fs::canonicalize(temp_dir.path())
+            .unwrap_or_else(|_| temp_dir.path().to_path_buf());
+        let actual_root = std::fs::canonicalize(&config.core.workspace_root)
+            .unwrap_or_else(|_| config.core.workspace_root.clone());
         assert_eq!(actual_root, expected_root);
     }
 

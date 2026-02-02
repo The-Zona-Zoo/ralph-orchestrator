@@ -26,8 +26,7 @@ mod pty_executor_integration {
         }
 
         fn on_tool_result(&mut self, id: &str, output: &str) {
-            self.tool_results
-                .push((id.to_string(), output.to_string()));
+            self.tool_results.push((id.to_string(), output.to_string()));
         }
 
         fn on_error(&mut self, error: &str) {

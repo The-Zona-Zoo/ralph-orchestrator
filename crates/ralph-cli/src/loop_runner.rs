@@ -276,10 +276,8 @@ pub async fn run_loop_impl(
     }
 
     // Seed max_iterations into TUI state for accurate iteration display.
-    if let Some(ref state) = tui_state {
-        if let Ok(mut s) = state.lock() {
-            s.max_iterations = Some(config.event_loop.max_iterations);
-        }
+    if let Some(mut s) = tui_state.as_ref().and_then(|state| state.lock().ok()) {
+        s.max_iterations = Some(config.event_loop.max_iterations);
     }
 
     // Spawn signal handlers AFTER TUI initialization to avoid deadlock
@@ -963,10 +961,8 @@ pub async fn run_loop_impl(
 
         // Note: TUI lines are now written directly to IterationBuffer during streaming,
         // so no post-execution transfer is needed.
-        if let Some(ref state) = tui_state {
-            if let Ok(mut s) = state.lock() {
-                s.finish_latest_iteration();
-            }
+        if let Some(mut s) = tui_state.as_ref().and_then(|state| state.lock().ok()) {
+            s.finish_latest_iteration();
         }
 
         // Log events from output before processing
@@ -1767,12 +1763,7 @@ mod tests {
     fn test_prepare_tui_iteration_seeds_max_iterations() {
         let state = Arc::new(Mutex::new(ralph_tui::TuiState::new()));
 
-        let lines = prepare_tui_iteration(
-            &state,
-            "Planner".to_string(),
-            "claude".to_string(),
-            42,
-        );
+        let lines = prepare_tui_iteration(&state, "Planner".to_string(), "claude".to_string(), 42);
 
         assert!(lines.is_some(), "should return a lines handle");
         let state = state.lock().expect("state lock");
@@ -1969,10 +1960,7 @@ mod tests {
         let queue = ralph_core::merge_queue::MergeQueue::new(repo_root);
         queue.enqueue("loop-9999", "merge prompt").expect("enqueue");
 
-        process_pending_merges_with_command(
-            repo_root,
-            OsStr::new("ralph-command-missing-12345"),
-        );
+        process_pending_merges_with_command(repo_root, OsStr::new("ralph-command-missing-12345"));
 
         let config_path = repo_root.join(".ralph/merge-loop-config.yml");
         assert!(config_path.exists());
@@ -2227,5 +2215,4 @@ mod tests {
 
         assert!(published.lock().unwrap().is_empty());
     }
-
 }

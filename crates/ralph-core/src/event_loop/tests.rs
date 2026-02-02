@@ -433,8 +433,7 @@ fn test_completion_promise_requires_last_event() {
     let _ = event_loop.process_events_from_jsonl();
     let reason = event_loop.check_completion_event();
     assert_eq!(
-        reason,
-        None,
+        reason, None,
         "Completion should be ignored when it is not the last event"
     );
 }
@@ -2180,8 +2179,7 @@ fn test_build_done_backpressure_rejects_high_complexity() {
     let mut event_loop = EventLoop::new(config);
     event_loop.event_reader = crate::event_reader::EventReader::new(&events_path);
 
-    let payload =
-        "tests: pass\nlint: pass\ntypecheck: pass\naudit: pass\ncoverage: pass\ncomplexity: 12\nduplication: pass";
+    let payload = "tests: pass\nlint: pass\ntypecheck: pass\naudit: pass\ncoverage: pass\ncomplexity: 12\nduplication: pass";
     write_event_to_jsonl(&events_path, "build.done", payload);
     let _ = event_loop.process_events_from_jsonl();
 
@@ -2222,8 +2220,7 @@ fn test_build_done_backpressure_rejects_duplication() {
     let mut event_loop = EventLoop::new(config);
     event_loop.event_reader = crate::event_reader::EventReader::new(&events_path);
 
-    let payload =
-        "tests: pass\nlint: pass\ntypecheck: pass\naudit: pass\ncoverage: pass\ncomplexity: 7\nduplication: fail";
+    let payload = "tests: pass\nlint: pass\ntypecheck: pass\naudit: pass\ncoverage: pass\ncomplexity: 7\nduplication: fail";
     write_event_to_jsonl(&events_path, "build.done", payload);
     let _ = event_loop.process_events_from_jsonl();
 
@@ -2614,8 +2611,7 @@ fn test_persistent_mode_suppresses_loop_complete() {
     assert!(
         pending.is_some_and(|events| events
             .iter()
-            .any(|e| e.topic.as_str() == "task.resume"
-                && e.payload.contains("Persistent mode"))),
+            .any(|e| e.topic.as_str() == "task.resume" && e.payload.contains("Persistent mode"))),
         "A task.resume event should be injected after suppressed LOOP_COMPLETE"
     );
 }
@@ -2716,7 +2712,10 @@ fn test_termination_status_texts() {
             TerminationReason::CompletionPromise,
             "All tasks completed successfully.",
         ),
-        (TerminationReason::MaxIterations, "Stopped at iteration limit."),
+        (
+            TerminationReason::MaxIterations,
+            "Stopped at iteration limit.",
+        ),
         (TerminationReason::MaxRuntime, "Stopped at runtime limit."),
         (TerminationReason::MaxCost, "Stopped at cost limit."),
         (
@@ -2923,11 +2922,7 @@ fn test_verify_scratchpad_complete_variants() {
     fs::write(&scratchpad_path, "## Tasks\n- [ ] Pending\n").unwrap();
     assert!(!event_loop.verify_scratchpad_complete().unwrap());
 
-    fs::write(
-        &scratchpad_path,
-        "## Tasks\n- [x] Done\n- [~] Cancelled\n",
-    )
-    .unwrap();
+    fs::write(&scratchpad_path, "## Tasks\n- [x] Done\n- [~] Cancelled\n").unwrap();
     assert!(event_loop.verify_scratchpad_complete().unwrap());
 }
 
@@ -2980,7 +2975,11 @@ fn test_termination_reason_strings_and_flags() {
 
     for (reason, expected_str, is_success) in cases {
         assert_eq!(reason.as_str(), expected_str, "{reason:?} as_str mismatch");
-        assert_eq!(reason.is_success(), is_success, "{reason:?} success mismatch");
+        assert_eq!(
+            reason.is_success(),
+            is_success,
+            "{reason:?} success mismatch"
+        );
     }
 }
 
@@ -3064,7 +3063,10 @@ fn test_inject_fallback_event_defaults_to_ralph() {
     assert!(event_loop.inject_fallback_event());
 
     let ralph_id = HatId::new("ralph");
-    let pending = event_loop.bus.peek_pending(&ralph_id).expect("ralph pending");
+    let pending = event_loop
+        .bus
+        .peek_pending(&ralph_id)
+        .expect("ralph pending");
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].topic.as_str(), "task.resume");
     assert!(pending[0].target.is_none());

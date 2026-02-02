@@ -149,9 +149,7 @@ fn get_tasks_path(root: Option<&PathBuf>) -> PathBuf {
 }
 
 fn status_matches_filter(status: TaskStatus, filter: &str) -> bool {
-    let normalized = filter
-        .to_lowercase()
-        .replace(['_', '-'], "");
+    let normalized = filter.to_lowercase().replace(['_', '-'], "");
     match status {
         TaskStatus::Open => normalized == "open",
         TaskStatus::InProgress => normalized == "inprogress",
@@ -675,8 +673,7 @@ mod tests {
 
         let marker_dir = root.join(".ralph");
         std::fs::create_dir_all(&marker_dir).expect("marker dir");
-        std::fs::write(marker_dir.join("current-loop-id"), "loop-a")
-            .expect("write marker");
+        std::fs::write(marker_dir.join("current-loop-id"), "loop-a").expect("write marker");
 
         let args = ReadyArgs {
             all: false,

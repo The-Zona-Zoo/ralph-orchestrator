@@ -82,7 +82,11 @@ fn validate_checks(runner: &PreflightRunner, checks: &[String]) -> Result<()> {
     let available = runner.check_names();
     let unknown: Vec<&String> = checks
         .iter()
-        .filter(|check| !available.iter().any(|name| name.eq_ignore_ascii_case(check)))
+        .filter(|check| {
+            !available
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case(check))
+        })
         .collect();
 
     if !unknown.is_empty() {
@@ -92,9 +96,7 @@ fn validate_checks(runner: &PreflightRunner, checks: &[String]) -> Result<()> {
             .map(|check| check.as_str())
             .collect::<Vec<_>>()
             .join(", ");
-        anyhow::bail!(
-            "Unknown check(s): {unknown_list}. Available checks: {available_list}"
-        );
+        anyhow::bail!("Unknown check(s): {unknown_list}. Available checks: {available_list}");
     }
 
     Ok(())
@@ -141,7 +143,11 @@ fn print_human_report(report: &PreflightReport, source: &str, use_colors: bool, 
         } else {
             colors::RED
         };
-        println!("Result: {color}{result}{reset}{detail}", reset = colors::RESET, detail = detail_text);
+        println!(
+            "Result: {color}{result}{reset}{detail}",
+            reset = colors::RESET,
+            detail = detail_text
+        );
     } else {
         println!("Result: {result}{detail}", detail = detail_text);
     }
@@ -162,7 +168,11 @@ fn print_check_line(check: &CheckResult, name_width: usize, use_colors: bool) {
 
     let status_padded = format!("{status_text:<4}");
     let status_display = if use_colors {
-        format!("{color}{status}{reset}", status = status_padded, reset = colors::RESET)
+        format!(
+            "{color}{status}{reset}",
+            status = status_padded,
+            reset = colors::RESET
+        )
     } else {
         status_padded
     };
@@ -182,7 +192,9 @@ fn print_check_line(check: &CheckResult, name_width: usize, use_colors: bool) {
     }
 }
 
-pub(crate) async fn load_config_for_preflight(config_sources: &[ConfigSource]) -> Result<RalphConfig> {
+pub(crate) async fn load_config_for_preflight(
+    config_sources: &[ConfigSource],
+) -> Result<RalphConfig> {
     let (primary_sources, overrides): (Vec<_>, Vec<_>) = config_sources
         .iter()
         .partition(|source| !matches!(source, ConfigSource::Override { .. }));

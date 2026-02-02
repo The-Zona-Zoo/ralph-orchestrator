@@ -86,12 +86,15 @@ fn check_node_with(node_cmd: &OsStr) -> Result<String> {
 
 /// Check that npm is installed and working. Returns the version string.
 fn check_npm_with(npm_cmd: &OsStr) -> Result<String> {
-    let output = Command::new(npm_cmd).arg("--version").output().map_err(|_| {
-        anyhow::anyhow!(
-            "npm is not installed or not in PATH.\n\
+    let output = Command::new(npm_cmd)
+        .arg("--version")
+        .output()
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "npm is not installed or not in PATH.\n\
              npm should come with Node.js. Try reinstalling Node: https://nodejs.org/"
-        )
-    })?;
+            )
+        })?;
 
     if !output.status.success() {
         anyhow::bail!(
@@ -610,8 +613,7 @@ mod tests {
 
     #[test]
     fn check_npm_reports_missing_binary() {
-        let err =
-            check_npm_with(OsStr::new("definitely-missing-npm-12345")).expect_err("missing");
+        let err = check_npm_with(OsStr::new("definitely-missing-npm-12345")).expect_err("missing");
         let msg = format!("{err}");
         assert!(msg.contains("npm is not installed"), "msg: {msg}");
     }
@@ -707,8 +709,7 @@ exit 1",
         let backend_dir = root.join("server");
         std::fs::create_dir_all(&backend_dir).expect("backend dir");
         std::fs::create_dir_all(root.join("node_modules")).expect("node_modules dir");
-        std::fs::write(root.join("node_modules/.package-lock.json"), "")
-            .expect("lockfile");
+        std::fs::write(root.join("node_modules/.package-lock.json"), "").expect("lockfile");
 
         preflight_with(
             &root,
@@ -741,8 +742,7 @@ exit 1",
         let backend_dir = root.join("server");
         std::fs::create_dir_all(&backend_dir).expect("backend dir");
         std::fs::create_dir_all(root.join("node_modules")).expect("node_modules dir");
-        std::fs::write(root.join("node_modules/.package-lock.json"), "")
-            .expect("lockfile");
+        std::fs::write(root.join("node_modules/.package-lock.json"), "").expect("lockfile");
 
         let err = preflight_with(
             &root,
@@ -768,11 +768,7 @@ exit 1",
         std::fs::create_dir_all(&root).expect("workspace dir");
         std::fs::write(root.join("package-lock.json"), "{}").expect("lockfile");
 
-        let npm_path = write_fake_executable(
-            &bin_dir,
-            "npm",
-            r#"echo "$1" > "$PWD/command.txt""#,
-        );
+        let npm_path = write_fake_executable(&bin_dir, "npm", r#"echo "$1" > "$PWD/command.txt""#);
 
         run_npm_install_with(&root, npm_path.as_os_str())
             .await
@@ -792,11 +788,7 @@ exit 1",
         let root = temp_dir.path().join("workspace");
         std::fs::create_dir_all(&root).expect("workspace dir");
 
-        let npm_path = write_fake_executable(
-            &bin_dir,
-            "npm",
-            r#"echo "$1" > "$PWD/command.txt""#,
-        );
+        let npm_path = write_fake_executable(&bin_dir, "npm", r#"echo "$1" > "$PWD/command.txt""#);
 
         run_npm_install_with(&root, npm_path.as_os_str())
             .await
@@ -903,8 +895,6 @@ exit 1",
         };
 
         let err = execute(args).await.expect_err("invalid workspace");
-        assert!(err
-            .to_string()
-            .contains("Invalid workspace path"));
+        assert!(err.to_string().contains("Invalid workspace path"));
     }
 }

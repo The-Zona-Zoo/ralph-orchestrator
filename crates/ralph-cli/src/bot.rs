@@ -1074,7 +1074,8 @@ mod tests {
             .await
             .expect_err("expected builtin config error");
         assert!(
-            err.to_string().contains("Builtin presets are not supported"),
+            err.to_string()
+                .contains("Builtin presets are not supported"),
             "unexpected error: {err}"
         );
     }
@@ -1088,7 +1089,8 @@ mod tests {
             .await
             .expect_err("expected remote config error");
         assert!(
-            err.to_string().contains("Remote config URLs are not supported"),
+            err.to_string()
+                .contains("Remote config URLs are not supported"),
             "unexpected error: {err}"
         );
     }
@@ -1108,7 +1110,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn test_save_telegram_state_creates_file() {
         let temp_dir = tempfile::tempdir().unwrap();
@@ -1116,10 +1117,7 @@ mod tests {
 
         save_telegram_state(123_456_789).expect("save telegram state");
 
-        let state_path = temp_dir
-            .path()
-            .join(".ralph")
-            .join("telegram-state.json");
+        let state_path = temp_dir.path().join(".ralph").join("telegram-state.json");
 
         // Verify the file was created with correct content
         let read_content = std::fs::read_to_string(&state_path).unwrap();
@@ -1314,7 +1312,6 @@ mod tests {
             .and_then(|t| t.get("bot_token"))
             .and_then(|v| v.as_str());
         assert_eq!(token, Some("test-token"));
-
     }
 
     #[test]
@@ -1433,8 +1430,11 @@ mod tests {
     fn test_is_robot_enabled_reads_config() {
         let temp_dir = tempfile::tempdir().unwrap();
         let _cwd = CwdGuard::set(temp_dir.path());
-        std::fs::write(temp_dir.path().join("ralph.yml"), "RObot:\n  enabled: true\n")
-            .unwrap();
+        std::fs::write(
+            temp_dir.path().join("ralph.yml"),
+            "RObot:\n  enabled: true\n",
+        )
+        .unwrap();
 
         assert!(is_robot_enabled());
 
@@ -1529,7 +1529,6 @@ mod tests {
         assert_eq!(resolve_chat_id(), None);
     }
 
-
     #[test]
     fn test_load_config_bot_token_from_missing_file_returns_none() {
         let temp_dir = tempfile::tempdir().unwrap();
@@ -1537,5 +1536,4 @@ mod tests {
 
         assert_eq!(load_config_bot_token_from(&missing_path), None);
     }
-
 }

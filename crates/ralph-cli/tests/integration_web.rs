@@ -1,10 +1,10 @@
 #[cfg(unix)]
 mod web_integration {
     use std::fs;
+    use std::net::TcpListener;
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
     use std::process::Command;
-    use std::net::TcpListener;
     use tempfile::TempDir;
 
     fn write_executable(dir: &Path, name: &str, body: &str) -> PathBuf {
@@ -25,8 +25,7 @@ mod web_integration {
         fs::create_dir_all(workspace.join("backend/ralph-web-server")).expect("backend dir");
         fs::create_dir_all(workspace.join("frontend/ralph-web")).expect("frontend dir");
         fs::create_dir_all(workspace.join("node_modules")).expect("node_modules dir");
-        fs::write(workspace.join("node_modules/.package-lock.json"), "")
-            .expect("lockfile");
+        fs::write(workspace.join("node_modules/.package-lock.json"), "").expect("lockfile");
 
         let bin_dir = workspace.join("bin");
         fs::create_dir_all(&bin_dir).expect("bin dir");

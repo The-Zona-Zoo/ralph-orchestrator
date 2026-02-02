@@ -1014,8 +1014,8 @@ fn resolve_loop(cwd: &std::path::Path, id: &str) -> Result<(String, Option<Strin
 mod tests {
     use super::*;
     use crate::test_support::CwdGuard;
-    use ralph_core::loop_registry::LoopEntry;
     use ralph_core::LoopLock;
+    use ralph_core::loop_registry::LoopEntry;
     use std::process::Command;
 
     #[test]
@@ -1275,9 +1275,7 @@ mod tests {
         let _cwd = CwdGuard::set(temp_dir.path());
 
         let queue = MergeQueue::new(temp_dir.path());
-        queue
-            .enqueue("loop-queue-1", "prompt")
-            .expect("enqueue");
+        queue.enqueue("loop-queue-1", "prompt").expect("enqueue");
 
         let err = retry_merge(RetryArgs {
             loop_id: "loop-queue-1".to_string(),
@@ -1302,9 +1300,7 @@ mod tests {
         registry.register(entry).expect("register loop");
 
         let queue = MergeQueue::new(temp_dir.path());
-        queue
-            .enqueue("loop-discard-1", "prompt")
-            .expect("enqueue");
+        queue.enqueue("loop-discard-1", "prompt").expect("enqueue");
 
         discard_loop(DiscardArgs {
             loop_id: "loop-discard-1".to_string(),
@@ -1382,7 +1378,10 @@ mod tests {
             .status()
             .expect("git config name");
         std::fs::write("README.md", "# Test").expect("write README");
-        Command::new("git").args(["add", "."]).status().expect("git add");
+        Command::new("git")
+            .args(["add", "."])
+            .status()
+            .expect("git add");
         Command::new("git")
             .args(["commit", "-m", "Initial commit", "--quiet"])
             .status()
@@ -1403,9 +1402,10 @@ mod tests {
         })
         .expect_err("missing branch should error");
 
-        assert!(err
-            .to_string()
-            .contains("Branch 'ralph/loop-missing-branch' not found"));
+        assert!(
+            err.to_string()
+                .contains("Branch 'ralph/loop-missing-branch' not found")
+        );
     }
 
     #[test]
@@ -1433,9 +1433,7 @@ mod tests {
         let _cwd = CwdGuard::set(temp_dir.path());
 
         let queue = MergeQueue::new(temp_dir.path());
-        queue
-            .enqueue("loop-merged-1", "prompt")
-            .expect("enqueue");
+        queue.enqueue("loop-merged-1", "prompt").expect("enqueue");
         queue
             .mark_merging("loop-merged-1", 4242)
             .expect("mark merging");
@@ -1480,9 +1478,7 @@ mod tests {
         let _cwd = CwdGuard::set(temp_dir.path());
 
         let queue = MergeQueue::new(temp_dir.path());
-        queue
-            .enqueue("loop-merging-1", "prompt")
-            .expect("enqueue");
+        queue.enqueue("loop-merging-1", "prompt").expect("enqueue");
         queue
             .mark_merging("loop-merging-1", 4242)
             .expect("mark merging");

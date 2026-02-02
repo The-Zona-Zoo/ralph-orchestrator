@@ -3,9 +3,7 @@
 use anyhow::Result;
 use clap::Parser;
 use ralph_adapters::{CliBackend, DEFAULT_PRIORITY};
-use ralph_core::{
-    CheckResult, CheckStatus, ConfigError, HatBackend, PreflightReport, RalphConfig,
-};
+use ralph_core::{CheckResult, CheckStatus, ConfigError, HatBackend, PreflightReport, RalphConfig};
 use std::collections::HashSet;
 use std::env;
 use std::ffi::OsString;
@@ -70,7 +68,11 @@ enum CommandCheckMode {
     PathOnly,
 }
 
-fn backend_checks<F, G>(_config: &RalphConfig, _command_version_ok: F, _command_exists: G) -> Vec<CheckResult>
+fn backend_checks<F, G>(
+    _config: &RalphConfig,
+    _command_version_ok: F,
+    _command_exists: G,
+) -> Vec<CheckResult>
 where
     F: Fn(&str) -> bool,
     G: Fn(&str) -> bool,
@@ -102,10 +104,7 @@ where
             let any_available = checks.iter().any(|check| check.status == CheckStatus::Pass);
 
             let summary = if any_available {
-                CheckResult::pass(
-                    "backend:auto",
-                    "Auto backend available",
-                )
+                CheckResult::pass("backend:auto", "Auto backend available")
             } else {
                 CheckResult::fail(
                     "backend:auto",
@@ -284,10 +283,7 @@ where
             continue;
         }
 
-        missing.push(format!(
-            "{backend}: set {}",
-            envs.join(" or ")
-        ));
+        missing.push(format!("{backend}: set {}", envs.join(" or ")));
     }
 
     if missing.is_empty() {
@@ -318,11 +314,9 @@ fn hat_collection_check(_config: &RalphConfig) -> CheckResult {
         Err(err) => match err {
             ConfigError::AmbiguousRouting { .. }
             | ConfigError::ReservedTrigger { .. }
-            | ConfigError::MissingDescription { .. } => CheckResult::fail(
-                "hats",
-                "Hat collection invalid",
-                err.to_string(),
-            ),
+            | ConfigError::MissingDescription { .. } => {
+                CheckResult::fail("hats", "Hat collection invalid", err.to_string())
+            }
             _ => CheckResult::pass("hats", "Hat collection parsed"),
         },
     }
@@ -358,9 +352,7 @@ fn auth_backend_names(config: &RalphConfig) -> Vec<String> {
             HatBackend::Named(name) => name.clone(),
             HatBackend::NamedWithArgs { backend_type, .. } => backend_type.clone(),
             HatBackend::KiroAgent { .. } => "kiro".to_string(),
-            HatBackend::Custom { command, .. } => {
-                canonical_backend_name("custom", Some(command))
-            }
+            HatBackend::Custom { command, .. } => canonical_backend_name("custom", Some(command)),
         };
 
         names.insert(name.to_lowercase());
@@ -579,7 +571,11 @@ fn print_check_line(check: &CheckResult, name_width: usize, use_colors: bool) {
 
     let status_padded = format!("{status_text:<4}");
     let status_display = if use_colors {
-        format!("{color}{status}{reset}", status = status_padded, reset = colors::RESET)
+        format!(
+            "{color}{status}{reset}",
+            status = status_padded,
+            reset = colors::RESET
+        )
     } else {
         status_padded
     };
@@ -667,11 +663,7 @@ mod tests {
         });
 
         assert_eq!(check.status, CheckStatus::Warn);
-        assert!(check
-            .message
-            .as_deref()
-            .unwrap_or("")
-            .contains("gemini"));
+        assert!(check.message.as_deref().unwrap_or("").contains("gemini"));
     }
 
     #[test]

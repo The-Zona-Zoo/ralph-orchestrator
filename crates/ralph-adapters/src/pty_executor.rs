@@ -1495,9 +1495,9 @@ fn build_result(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::claude_stream::{AssistantMessage, UserMessage};
     #[cfg(unix)]
     use crate::cli_backend::PromptMode;
-    use crate::claude_stream::{AssistantMessage, UserMessage};
     use crate::stream_handler::{SessionResult, StreamHandler};
     #[cfg(unix)]
     use tempfile::TempDir;
@@ -1735,8 +1735,7 @@ mod tests {
         }
 
         fn on_tool_result(&mut self, id: &str, output: &str) {
-            self.tool_results
-                .push((id.to_string(), output.to_string()));
+            self.tool_results.push((id.to_string(), output.to_string()));
         }
 
         fn on_error(&mut self, error: &str) {
@@ -2057,7 +2056,12 @@ mod tests {
             .expect("run_observe_streaming");
 
         assert!(result.success);
-        assert!(handler.texts.iter().any(|text| text.contains("Hello stream")));
+        assert!(
+            handler
+                .texts
+                .iter()
+                .any(|text| text.contains("Hello stream"))
+        );
         assert_eq!(handler.completions.len(), 1);
         assert!(result.extracted_text.contains("Hello stream"));
         assert_eq!(result.termination, TerminationType::Natural);

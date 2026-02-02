@@ -127,10 +127,8 @@ fn test_task_close_and_fail_update_status() {
     ralph_task_ok(temp_path, &["fail", &fail_id]);
 
     let tasks = list_tasks(temp_path, &["--all"]);
-    let status_by_id: std::collections::HashMap<String, TaskStatus> = tasks
-        .into_iter()
-        .map(|t| (t.id, t.status))
-        .collect();
+    let status_by_id: std::collections::HashMap<String, TaskStatus> =
+        tasks.into_iter().map(|t| (t.id, t.status)).collect();
 
     assert_eq!(status_by_id.get(&close_id), Some(&TaskStatus::Closed));
     assert_eq!(status_by_id.get(&fail_id), Some(&TaskStatus::Failed));

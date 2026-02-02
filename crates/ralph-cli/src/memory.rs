@@ -810,26 +810,21 @@ mod tests {
     fn format_relative_date_with_today_returns_input_on_invalid() {
         let today = fixed_today();
         let value = "not-a-date";
-        assert_eq!(
-            format_relative_date_with_today(value, today),
-            "not-a-date"
-        );
+        assert_eq!(format_relative_date_with_today(value, today), "not-a-date");
     }
 
     #[test]
     fn format_relative_date_with_today_returns_date_for_old_entries() {
         let today = fixed_today();
         let date_str = date_days_ago(400);
-        assert_eq!(
-            format_relative_date_with_today(&date_str, today),
-            date_str
-        );
+        assert_eq!(format_relative_date_with_today(&date_str, today), date_str);
     }
 
     #[test]
     fn truncate_to_budget_prefers_complete_memory_blocks() {
         let content = "### mem-1\n> hi\n<!-- tags: a | created: 2026-01-31 -->\n\n\
-### mem-2\n> more\n<!-- tags: b | created: 2026-01-31 -->\n".to_string();
+### mem-2\n> more\n<!-- tags: b | created: 2026-01-31 -->\n"
+            .to_string();
         let first_end = content.find("-->").expect("marker") + 3;
         let budget = (first_end + 6).div_ceil(4);
         let truncated = truncate_to_budget(&content, budget);

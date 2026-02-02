@@ -1,7 +1,7 @@
 //! Preflight checks for validating environment and configuration before running.
 
-use crate::{RalphConfig, git_ops};
 use crate::config::ConfigWarning;
+use crate::{RalphConfig, git_ops};
 use async_trait::async_trait;
 use serde::Serialize;
 use std::env;
@@ -123,11 +123,7 @@ impl PreflightRunner {
         Self::run_checks(self.checks.iter(), config).await
     }
 
-    pub async fn run_selected(
-        &self,
-        config: &RalphConfig,
-        names: &[String],
-    ) -> PreflightReport {
+    pub async fn run_selected(&self, config: &RalphConfig, names: &[String]) -> PreflightReport {
         let requested: Vec<String> = names.iter().map(|name| name.to_lowercase()).collect();
         let checks = self
             .checks
@@ -172,11 +168,7 @@ impl PreflightCheck for ConfigValidCheck {
                     details,
                 )
             }
-            Err(err) => CheckResult::fail(
-                self.name(),
-                "Configuration invalid",
-                format!("{err}"),
-            ),
+            Err(err) => CheckResult::fail(self.name(), "Configuration invalid", format!("{err}")),
         }
     }
 }
@@ -221,15 +213,10 @@ impl PreflightCheck for TelegramTokenCheck {
         };
 
         match telegram_get_me(&token).await {
-            Ok(info) => CheckResult::pass(
-                self.name(),
-                format!("Bot token valid (@{})", info.username),
-            ),
-            Err(err) => CheckResult::fail(
-                self.name(),
-                "Telegram token invalid",
-                format!("{err}"),
-            ),
+            Ok(info) => {
+                CheckResult::pass(self.name(), format!("Bot token valid (@{})", info.username))
+            }
+            Err(err) => CheckResult::fail(self.name(), "Telegram token invalid", format!("{err}")),
         }
     }
 }
@@ -255,25 +242,20 @@ impl PreflightCheck for GitCleanCheck {
                     self.name(),
                     "Git repository unavailable",
                     format!("{err}"),
-                )
+                );
             }
         };
 
         match git_ops::is_working_tree_clean(root) {
-            Ok(true) => CheckResult::pass(
-                self.name(),
-                format!("Working tree clean ({branch})"),
-            ),
+            Ok(true) => CheckResult::pass(self.name(), format!("Working tree clean ({branch})")),
             Ok(false) => CheckResult::warn(
                 self.name(),
                 "Working tree has uncommitted changes",
                 "Commit or stash changes before running for clean diffs",
             ),
-            Err(err) => CheckResult::fail(
-                self.name(),
-                "Unable to read git status",
-                format!("{err}"),
-            ),
+            Err(err) => {
+                CheckResult::fail(self.name(), "Unable to read git status", format!("{err}"))
+            }
         }
     }
 }
@@ -519,7 +501,9 @@ fn check_spec_completeness(path: &Path, content: &str) -> Option<String> {
     let has_acceptance = has_acceptance_criteria(content);
 
     if !has_acceptance {
-        return Some(format!("{filename}: missing acceptance criteria (Given/When/Then)"));
+        return Some(format!(
+            "{filename}: missing acceptance criteria (Given/When/Then)"
+        ));
     }
 
     None
@@ -759,16 +743,10 @@ fn check_auto_backend(name: &str, config: &RalphConfig) -> CheckResult {
         checked.push(format!("{backend} ({command})"));
         if command_supports_version(backend) {
             if command_available(&command) {
-                return CheckResult::pass(
-                    name,
-                    format!("Auto backend available ({backend})"),
-                );
+                return CheckResult::pass(name, format!("Auto backend available ({backend})"));
             }
         } else if find_executable(&command).is_some() {
-            return CheckResult::pass(
-                name,
-                format!("Auto backend available ({backend})"),
-            );
+            return CheckResult::pass(name, format!("Auto backend available ({backend})"));
         }
     }
 
@@ -799,10 +777,7 @@ fn check_named_backend(name: &str, config: &RalphConfig, backend: &str) -> Check
 
     if backend.eq_ignore_ascii_case("custom") {
         if find_executable(&command).is_some() {
-            return CheckResult::pass(
-                name,
-                format!("Custom backend available ({})", command),
-            );
+            return CheckResult::pass(name, format!("Custom backend available ({})", command));
         }
 
         return CheckResult::fail(
@@ -1439,11 +1414,7 @@ status: draft
         )
         .expect("write a");
 
-        std::fs::write(
-            specs_dir.join("b.spec.md"),
-            "**Given** X\n**Then** Y\n",
-        )
-        .expect("write b");
+        std::fs::write(specs_dir.join("b.spec.md"), "**Given** X\n**Then** Y\n").expect("write b");
 
         // Implemented spec should be excluded
         std::fs::write(

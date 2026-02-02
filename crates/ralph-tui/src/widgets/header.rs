@@ -264,7 +264,10 @@ mod tests {
         );
         hat_map.insert(
             "review.correctness".to_string(),
-            (HatId::new("correctness_reviewer"), "🧪Correctness".to_string()),
+            (
+                HatId::new("correctness_reviewer"),
+                "🧪Correctness".to_string(),
+            ),
         );
 
         let mut state = TuiState::with_hat_map(hat_map);
@@ -307,7 +310,7 @@ mod tests {
             Some("🔨 Builder".to_string()),
             Some("claude".to_string()),
         );
-        if let Some(iteration) = state.iterations.get_mut(0) {
+        if let Some(iteration) = state.iterations.first_mut() {
             iteration.started_at = Some(
                 Instant::now()
                     .checked_sub(Duration::from_secs(125))
@@ -318,7 +321,7 @@ mod tests {
         state.update(&Event::new("build.done", "Done"));
         let elapsed = state
             .iterations
-            .get(0)
+            .first()
             .and_then(|iteration| iteration.elapsed)
             .expect("iteration elapsed should be frozen on build.done");
 

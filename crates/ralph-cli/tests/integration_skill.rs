@@ -119,11 +119,7 @@ fn test_skill_load_finds_nested_skills_dir_when_root_missing() {
     let temp_dir = TempDir::new().expect("temp dir");
     let temp_path = temp_dir.path();
 
-    fs::write(
-        temp_path.join("ralph.yml"),
-        "skills:\n  enabled: true\n",
-    )
-    .expect("write ralph.yml");
+    fs::write(temp_path.join("ralph.yml"), "skills:\n  enabled: true\n").expect("write ralph.yml");
 
     let repo_dir = temp_path.join("repo");
     let nested_dir = repo_dir.join("nested");
