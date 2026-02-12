@@ -243,4 +243,78 @@ mod pty_executor_integration {
         assert!((handler.completions[0].total_cost_usd - 0.08).abs() < 1e-10);
         assert_eq!(handler.completions[0].num_turns, 2);
     }
+
+    #[tokio::test]
+    async fn run_observe_streaming_pi_thinking_hidden_without_tui() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let backend = CliBackend {
+            command: "sh".to_string(),
+            args: vec!["-c".to_string()],
+            prompt_mode: PromptMode::Arg,
+            prompt_flag: None,
+            output_format: OutputFormat::PiStreamJson,
+            env_vars: vec![],
+        };
+        let config = PtyConfig {
+            interactive: false,
+            idle_timeout_secs: 0,
+            cols: 80,
+            rows: 24,
+            workspace_root: temp_dir.path().to_path_buf(),
+        };
+        let executor = PtyExecutor::new(backend, config);
+        let (_tx, rx) = tokio::sync::watch::channel(false);
+        let mut handler = CapturingHandler::default();
+
+        let script = r#"printf '%s\n' \
+'{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"thinking text"}}' \
+'{"type":"turn_end","message":{"role":"assistant","content":[],"usage":{"input":1,"output":1,"cacheRead":0,"cacheWrite":0,"cost":{"total":0.01}},"stopReason":"stop"}}'"#;
+
+        let result = executor
+            .run_observe_streaming(script, rx, &mut handler)
+            .await
+            .expect("run_observe_streaming");
+
+        assert!(result.success);
+        assert!(handler.texts.is_empty());
+        assert!(result.extracted_text.is_empty());
+    }
+
+    #[tokio::test]
+    async fn run_observe_streaming_pi_thinking_shown_in_tui_mode() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let backend = CliBackend {
+            command: "sh".to_string(),
+            args: vec!["-c".to_string()],
+            prompt_mode: PromptMode::Arg,
+            prompt_flag: None,
+            output_format: OutputFormat::PiStreamJson,
+            env_vars: vec![],
+        };
+        let config = PtyConfig {
+            interactive: false,
+            idle_timeout_secs: 0,
+            cols: 80,
+            rows: 24,
+            workspace_root: temp_dir.path().to_path_buf(),
+        };
+        let mut executor = PtyExecutor::new(backend, config);
+        executor.set_tui_mode(true);
+        let (_tx, rx) = tokio::sync::watch::channel(false);
+        let mut handler = CapturingHandler::default();
+
+        let script = r#"printf '%s\n' \
+'{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"thinking text"}}' \
+'{"type":"turn_end","message":{"role":"assistant","content":[],"usage":{"input":1,"output":1,"cacheRead":0,"cacheWrite":0,"cost":{"total":0.01}},"stopReason":"stop"}}'"#;
+
+        let result = executor
+            .run_observe_streaming(script, rx, &mut handler)
+            .await
+            .expect("run_observe_streaming");
+
+        assert!(result.success);
+        assert_eq!(handler.texts, vec!["thinking text"]);
+        // Thinking text should not be included in extracted_text (used for event parsing).
+        assert!(result.extracted_text.is_empty());
+    }
 }

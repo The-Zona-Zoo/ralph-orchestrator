@@ -77,6 +77,13 @@ impl CliBackend {
             _ => Self::claude(), // Default to claude
         };
 
+        // Apply configured extra args for named backends too.
+        // This keeps ralph.yml `cli.args` consistent with CLI `-- ...` extra args behavior.
+        backend.args.extend(config.args.iter().cloned());
+        if backend.command == "codex" {
+            Self::reconcile_codex_args(&mut backend.args);
+        }
+
         // Honor command override for named backends (e.g., custom binary path)
         if let Some(ref cmd) = config.command {
             backend.command = cmd.clone();
@@ -1416,12 +1423,23 @@ mod tests {
             backend: "pi".to_string(),
             command: None,
             prompt_mode: "arg".to_string(),
+            args: vec![
+                "--provider".to_string(),
+                "zai".to_string(),
+                "--model".to_string(),
+                "glm-5".to_string(),
+            ],
             ..Default::default()
         };
         let backend = CliBackend::from_config(&config).unwrap();
+        let (_cmd, args, _stdin, _temp) = backend.build_command("test prompt", false);
 
         assert_eq!(backend.command, "pi");
         assert_eq!(backend.output_format, OutputFormat::PiStreamJson);
+        assert!(args.contains(&"--provider".to_string()));
+        assert!(args.contains(&"zai".to_string()));
+        assert!(args.contains(&"--model".to_string()));
+        assert!(args.contains(&"glm-5".to_string()));
     }
 
     #[test]

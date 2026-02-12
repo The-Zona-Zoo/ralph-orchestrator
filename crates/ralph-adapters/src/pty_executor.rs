@@ -578,6 +578,19 @@ impl PtyExecutor {
         // Text format streams raw output directly to handler
         let is_stream_json = output_format == OutputFormat::StreamJson;
         let is_pi_stream = output_format == OutputFormat::PiStreamJson;
+        // Pi thinking deltas are noisy for plain console output but useful in TUI.
+        let show_pi_thinking = is_pi_stream && self.tui_mode;
+        let is_real_pi_backend = self.backend.command == "pi";
+
+        if is_pi_stream && is_real_pi_backend {
+            let configured_provider = extract_cli_flag_value(&self.backend.args, "--provider", "-p")
+                .unwrap_or_else(|| "auto".to_string());
+            let configured_model = extract_cli_flag_value(&self.backend.args, "--model", "-m")
+                .unwrap_or_else(|| "default".to_string());
+            handler.on_text(&format!(
+                "Pi configured: provider={configured_provider}, model={configured_model}\n"
+            ));
+        }
 
         // Keep temp_file alive for the duration of execution
         let (pair, mut child, stdin_input, _temp_file) = self.spawn_pty(prompt)?;
@@ -721,7 +734,13 @@ impl PtyExecutor {
                                         line_buffer = line_buffer[newline_pos + 1..].to_string();
 
                                         if let Some(event) = PiStreamParser::parse_line(&line) {
-                                            dispatch_pi_stream_event(event, handler, &mut extracted_text, &mut pi_state, false);
+                                            dispatch_pi_stream_event(
+                                                event,
+                                                handler,
+                                                &mut extracted_text,
+                                                &mut pi_state,
+                                                show_pi_thinking,
+                                            );
                                         }
                                     }
                                 } else {
@@ -741,7 +760,13 @@ impl PtyExecutor {
                             } else if is_pi_stream && !line_buffer.is_empty()
                                 && let Some(event) = PiStreamParser::parse_line(&line_buffer)
                             {
-                                dispatch_pi_stream_event(event, handler, &mut extracted_text, &mut pi_state, false);
+                                dispatch_pi_stream_event(
+                                    event,
+                                    handler,
+                                    &mut extracted_text,
+                                    &mut pi_state,
+                                    show_pi_thinking,
+                                );
                             }
                             break;
                         }
@@ -806,7 +831,7 @@ impl PtyExecutor {
                                             handler,
                                             &mut extracted_text,
                                             &mut pi_state,
-                                            false,
+                                            show_pi_thinking,
                                         );
                                     }
                                 }
@@ -833,7 +858,7 @@ impl PtyExecutor {
                         handler,
                         &mut extracted_text,
                         &mut pi_state,
-                        false,
+                        show_pi_thinking,
                     );
                 }
 
@@ -841,6 +866,13 @@ impl PtyExecutor {
 
                 // Synthesize on_complete for Pi sessions (pi has no dedicated result event)
                 if is_pi_stream {
+                    if is_real_pi_backend {
+                        let stream_provider = pi_state.stream_provider.as_deref().unwrap_or("unknown");
+                        let stream_model = pi_state.stream_model.as_deref().unwrap_or("unknown");
+                        handler.on_text(&format!(
+                            "Pi stream: provider={stream_provider}, model={stream_model}\n"
+                        ));
+                    }
                     handler.on_complete(&SessionResult {
                         duration_ms: start_time.elapsed().as_millis() as u64,
                         total_cost_usd: pi_state.total_cost_usd,
@@ -883,6 +915,13 @@ impl PtyExecutor {
 
         // Synthesize on_complete for Pi sessions (pi has no dedicated result event)
         if is_pi_stream {
+            if is_real_pi_backend {
+                let stream_provider = pi_state.stream_provider.as_deref().unwrap_or("unknown");
+                let stream_model = pi_state.stream_model.as_deref().unwrap_or("unknown");
+                handler.on_text(&format!(
+                    "Pi stream: provider={stream_provider}, model={stream_model}\n"
+                ));
+            }
             handler.on_complete(&SessionResult {
                 duration_ms: start_time.elapsed().as_millis() as u64,
                 total_cost_usd: pi_state.total_cost_usd,
@@ -1510,6 +1549,33 @@ fn resolve_termination_type(exit_code: i32, default: TerminationType) -> Termina
     }
 }
 
+fn extract_cli_flag_value(args: &[String], long_flag: &str, short_flag: &str) -> Option<String> {
+    for (i, arg) in args.iter().enumerate() {
+        if arg == long_flag || arg == short_flag {
+            if let Some(value) = args.get(i + 1)
+                && !value.starts_with('-')
+            {
+                return Some(value.clone());
+            }
+            continue;
+        }
+
+        if let Some(value) = arg.strip_prefix(&format!("{long_flag}="))
+            && !value.is_empty()
+        {
+            return Some(value.to_string());
+        }
+
+        if let Some(value) = arg.strip_prefix(&format!("{short_flag}="))
+            && !value.is_empty()
+        {
+            return Some(value.to_string());
+        }
+    }
+
+    None
+}
+
 /// Dispatches a Claude stream event to the appropriate handler method.
 /// Also accumulates text content into `extracted_text` for event parsing.
 fn dispatch_stream_event<H: StreamHandler>(
@@ -1813,6 +1879,25 @@ mod tests {
 
         let termination = resolve_termination_type(0, TerminationType::ForceKill);
         assert_eq!(termination, TerminationType::ForceKill);
+    }
+
+    #[test]
+    fn test_extract_cli_flag_value_supports_split_and_equals_syntax() {
+        let args = vec![
+            "--provider".to_string(),
+            "anthropic".to_string(),
+            "--model=claude-sonnet-4".to_string(),
+        ];
+
+        assert_eq!(
+            extract_cli_flag_value(&args, "--provider", "-p"),
+            Some("anthropic".to_string())
+        );
+        assert_eq!(
+            extract_cli_flag_value(&args, "--model", "-m"),
+            Some("claude-sonnet-4".to_string())
+        );
+        assert_eq!(extract_cli_flag_value(&args, "--foo", "-f"), None);
     }
 
     #[derive(Default)]

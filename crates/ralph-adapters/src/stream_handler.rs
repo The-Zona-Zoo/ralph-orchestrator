@@ -206,7 +206,7 @@ pub trait StreamHandler: Send {
     /// * `input` - Tool input parameters as JSON (file paths, commands, patterns, etc.)
     fn on_tool_call(&mut self, name: &str, id: &str, input: &serde_json::Value);
 
-    /// Called when a tool returns results (verbose only).
+    /// Called when a tool returns results.
     fn on_tool_result(&mut self, id: &str, output: &str);
 
     /// Called when an error occurs.
@@ -392,8 +392,8 @@ pub struct TuiStreamHandler {
     current_text_buffer: String,
     /// Chronological sequence of content blocks (frozen text + non-text events)
     blocks: Vec<ContentBlock>,
-    /// Verbose mode (show tool results)
-    verbose: bool,
+    /// Reserved for parity with non-TUI handlers.
+    _verbose: bool,
     /// Collected output lines for rendering
     lines: Arc<Mutex<Vec<Line<'static>>>>,
 }
@@ -402,12 +402,12 @@ impl TuiStreamHandler {
     /// Creates a new TUI handler.
     ///
     /// # Arguments
-    /// * `verbose` - If true, shows tool results and session summary.
+    /// * `verbose` - If true, shows session summary.
     pub fn new(verbose: bool) -> Self {
         Self {
             current_text_buffer: String::new(),
             blocks: Vec::new(),
-            verbose,
+            _verbose: verbose,
             lines: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -419,7 +419,7 @@ impl TuiStreamHandler {
         Self {
             current_text_buffer: String::new(),
             blocks: Vec::new(),
-            verbose,
+            _verbose: verbose,
             lines,
         }
     }
@@ -517,14 +517,12 @@ impl StreamHandler for TuiStreamHandler {
     }
 
     fn on_tool_result(&mut self, _id: &str, output: &str) {
-        if self.verbose {
-            let clean = sanitize_tui_inline_text(output);
-            let line = Line::from(Span::styled(
-                format!(" \u{2713} {}", truncate(&clean, 200)),
-                Style::default().fg(RatatuiColor::DarkGray),
-            ));
-            self.add_non_text_line(line);
-        }
+        let clean = sanitize_tui_inline_text(output);
+        let line = Line::from(Span::styled(
+            format!(" \u{2713} {}", truncate(&clean, 200)),
+            Style::default().fg(RatatuiColor::DarkGray),
+        ));
+        self.add_non_text_line(line);
     }
 
     fn on_error(&mut self, error: &str) {
@@ -872,18 +870,26 @@ mod tests {
         }
 
         #[test]
-        fn tool_result_quiet_is_silent() {
+        fn tool_result_quiet_shows_content() {
             // Given TuiStreamHandler with verbose=false
             let mut handler = TuiStreamHandler::new(false);
 
             // When on_tool_result(...) is called
             handler.on_tool_result("tool_1", "file contents here");
 
-            // Then no output is produced
+            // Then result content appears in output
             let lines = collect_lines(&handler);
+            assert_eq!(lines.len(), 1);
+            let line_text = lines[0].to_string();
             assert!(
-                lines.is_empty(),
-                "verbose=false should not produce tool result output"
+                line_text.contains('\u{2713}'),
+                "Should contain checkmark: {}",
+                line_text
+            );
+            assert!(
+                line_text.contains("file contents here"),
+                "Should contain result content: {}",
+                line_text
             );
         }
 
