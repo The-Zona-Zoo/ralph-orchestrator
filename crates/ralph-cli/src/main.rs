@@ -32,7 +32,7 @@ mod tools;
 mod web;
 
 use anyhow::{Context, Result};
-use clap::{ArgAction, Parser, Subcommand, ValueEnum};
+use clap::{ArgAction, CommandFactory, Parser, Subcommand, ValueEnum};
 use ralph_adapters::detect_backend;
 use ralph_core::{
     CheckStatus, EventHistory, LockError, LoopContext, LoopEntry, LoopLock, LoopRegistry,
@@ -221,8 +221,9 @@ pub enum OutputFormat {
     Json,
 }
 
-// Re-export colors from display module for use in this file
+// Re-export colors and truncate from display module for use in this file
 use display::colors;
+use display::truncate;
 
 /// Source for configuration: file path, builtin preset, remote URL, or config override.
 #[derive(Debug, Clone)]
@@ -440,6 +441,9 @@ enum Commands {
 
     /// Manage Telegram bot setup and testing
     Bot(bot::BotArgs),
+
+    /// Generate shell completions
+    Completions(CompletionsArgs),
 }
 
 /// Arguments for the init subcommand.
@@ -710,6 +714,22 @@ struct CodeTaskArgs {
     custom_args: Vec<String>,
 }
 
+/// Arguments for the completions subcommand.
+#[derive(Parser, Debug)]
+struct CompletionsArgs {
+    /// Shell to generate completions for
+    #[arg(value_enum)]
+    shell: clap_complete::Shell,
+}
+
+fn completions_command(args: CompletionsArgs) -> Result<()> {
+    use clap_complete::generate;
+
+    let mut cli = Cli::command();
+    generate(args.shell, &mut cli, "ralph", &mut std::io::stdout());
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Install panic hook to restore terminal state on crash
@@ -840,6 +860,7 @@ async fn main() -> Result<()> {
         Some(Commands::Bot(args)) => {
             bot::execute(args, &config_sources, cli.color.should_use_colors()).await
         }
+        Some(Commands::Completions(args)) => completions_command(args),
         None => {
             // Default to run with TUI enabled (new default behavior)
             let args = RunArgs {
@@ -1270,13 +1291,7 @@ async fn run_command(
                 }
             }
         })
-        .map(|p| {
-            if p.len() > 100 {
-                format!("{}...", &p[..100])
-            } else {
-                p
-            }
-        })
+        .map(|p| truncate(&p, 100))
         .unwrap_or_else(|| "[no prompt]".to_string());
 
     let mut pending_worktree_registration: Option<LoopEntry> = None;

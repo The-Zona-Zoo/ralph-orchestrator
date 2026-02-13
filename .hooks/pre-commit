@@ -4,11 +4,21 @@
 
 set -e
 
+echo "🔍 Checking embedded files are in sync..."
+if ! ./scripts/sync-embedded-files.sh check; then
+    echo ""
+    echo "❌ Embedded files out of sync!"
+    echo "   Run './scripts/sync-embedded-files.sh' and commit the generated changes."
+    exit 1
+fi
+echo "✅ Embedded files are in sync"
+
+echo ""
 echo "🔍 Checking formatting..."
-if ! cargo fmt --check; then
+if ! cargo fmt --all -- --check; then
     echo ""
     echo "❌ Formatting check failed!"
-    echo "   Run 'cargo fmt' to fix formatting issues."
+    echo "   Run 'cargo fmt --all' to fix formatting issues."
     exit 1
 fi
 echo "✅ Formatting OK"

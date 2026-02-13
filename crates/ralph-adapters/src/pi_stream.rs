@@ -95,6 +95,8 @@ pub enum PiContentBlock {
 pub struct PiTurnMessage {
     #[serde(rename = "stopReason")]
     pub stop_reason: Option<String>,
+    pub provider: Option<String>,
+    pub model: Option<String>,
     pub usage: Option<PiUsage>,
 }
 
@@ -147,6 +149,8 @@ impl PiStreamParser {
 pub struct PiSessionState {
     pub total_cost_usd: f64,
     pub num_turns: u32,
+    pub stream_provider: Option<String>,
+    pub stream_model: Option<String>,
 }
 
 impl PiSessionState {
@@ -154,6 +158,8 @@ impl PiSessionState {
         Self {
             total_cost_usd: 0.0,
             num_turns: 0,
+            stream_provider: None,
+            stream_model: None,
         }
     }
 }
@@ -223,11 +229,22 @@ pub fn dispatch_pi_stream_event<H: StreamHandler>(
         }
         PiStreamEvent::TurnEnd { message } => {
             state.num_turns += 1;
-            if let Some(msg) = &message
-                && let Some(usage) = &msg.usage
-                && let Some(cost) = &usage.cost
-            {
-                state.total_cost_usd += cost.total;
+            if let Some(msg) = &message {
+                if let Some(provider) = &msg.provider
+                    && !provider.is_empty()
+                {
+                    state.stream_provider = Some(provider.clone());
+                }
+                if let Some(model) = &msg.model
+                    && !model.is_empty()
+                {
+                    state.stream_model = Some(model.clone());
+                }
+                if let Some(usage) = &msg.usage
+                    && let Some(cost) = &usage.cost
+                {
+                    state.total_cost_usd += cost.total;
+                }
             }
         }
         PiStreamEvent::Other => {}
@@ -643,6 +660,8 @@ mod tests {
             let event = PiStreamEvent::TurnEnd {
                 message: Some(PiTurnMessage {
                     stop_reason: Some("stop".to_string()),
+                    provider: None,
+                    model: None,
                     usage: Some(PiUsage {
                         input: 100,
                         output: 50,
@@ -668,6 +687,8 @@ mod tests {
         let event = PiStreamEvent::TurnEnd {
             message: Some(PiTurnMessage {
                 stop_reason: Some("stop".to_string()),
+                provider: None,
+                model: None,
                 usage: None,
             }),
         };
@@ -768,12 +789,35 @@ mod tests {
             PiStreamEvent::TurnEnd { message } => {
                 let msg = message.unwrap();
                 assert_eq!(msg.stop_reason, Some("stop".to_string()));
+                assert_eq!(msg.provider, Some("anthropic".to_string()));
+                assert_eq!(msg.model, Some("claude-opus-4-5".to_string()));
                 let usage = msg.usage.unwrap();
                 let cost = usage.cost.unwrap();
                 assert!((cost.total - 0.00526).abs() < 1e-10);
             }
             _ => panic!("Expected TurnEnd"),
         }
+    }
+
+    #[test]
+    fn test_dispatch_turn_end_captures_stream_identity() {
+        let mut handler = RecordingHandler::default();
+        let mut extracted = String::new();
+        let mut state = PiSessionState::new();
+
+        let event = PiStreamEvent::TurnEnd {
+            message: Some(PiTurnMessage {
+                stop_reason: Some("stop".to_string()),
+                provider: Some("anthropic".to_string()),
+                model: Some("claude-sonnet-4".to_string()),
+                usage: None,
+            }),
+        };
+
+        dispatch_pi_stream_event(event, &mut handler, &mut extracted, &mut state, false);
+
+        assert_eq!(state.stream_provider, Some("anthropic".to_string()));
+        assert_eq!(state.stream_model, Some("claude-sonnet-4".to_string()));
     }
 
     #[test]
